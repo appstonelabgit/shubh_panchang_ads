@@ -1,0 +1,16 @@
+name: apsl_ads
+description: Multi-network ad management (AdMob + Google Ad Manager) with waterfall, retry, and recovery — AdMob + Google Ad Manager waterfall with retry, recovery, and dynamic Firebase config support.
+version: 1.0.0
+publish_to: none
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+  flutter: ">=3.24.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  google_mobile_ads: ^7.0.0
+  collection: ^1.19.1
+  connectivity_plus: ^6.1.4
+  logger: ^2.5.0
