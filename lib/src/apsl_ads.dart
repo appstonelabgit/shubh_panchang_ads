@@ -465,30 +465,103 @@ class ApslAds {
     BuildContext? context,
   }) {
     try {
-      final ad = _fetchAdByTypeAndNetwork(adUnitType, adNetwork);
-      if (ad == null) {
-        _logger.logInfo("No ad found for $adUnitType from $adNetwork");
+      if (adNetwork != AdNetwork.any) {
+        // Specific network requested — use original behavior.
+        final ad = _fetchAdByTypeAndNetwork(adUnitType, adNetwork);
+        if (ad == null) {
+          _logger.logInfo("No ad found for $adUnitType from $adNetwork");
+          return false;
+        }
+        if (ad.isAdLoaded) {
+          if (shouldShowLoader && context != null) {
+            showLoaderDialog(context);
+          }
+          _updateAdIndex(adUnitType);
+          ad.show();
+          return true;
+        } else {
+          _logger.logInfo("Ad not loaded for $adUnitType from $adNetwork");
+          ad.load();
+          return false;
+        }
+      }
+
+      // AdNetwork.any — try ALL ads of this type, starting from the
+      // current round-robin index. If the current one isn't loaded,
+      // try the next one instead of giving up immediately.
+      final ads = _adsForType(adUnitType);
+      if (ads.isEmpty) {
+        _logger.logInfo("No ad found for $adUnitType");
         return false;
       }
 
-      if (ad.isAdLoaded) {
-        if (shouldShowLoader && context != null) {
-          showLoaderDialog(context);
+      final startIndex = _indexForType(adUnitType);
+      for (var i = 0; i < ads.length; i++) {
+        final index = (startIndex + i) % ads.length;
+        final ad = ads[index];
+
+        if (ad.isAdLoaded) {
+          if (shouldShowLoader && context != null) {
+            showLoaderDialog(context);
+          }
+          _setIndexForType(adUnitType, (index + 1) % ads.length);
+          ad.show();
+          return true;
         }
-        // Advance the round-robin cursor BEFORE show() so the next call
-        // tries the next ad even if this show() ends up failing inside
-        // the SDK. The cursor advance is cheap and idempotent.
-        _updateAdIndex(adUnitType);
-        ad.show();
-        return true;
-      } else {
-        _logger.logInfo("Ad not loaded for $adUnitType from $adNetwork");
-        ad.load();
-        return false;
       }
+
+      // None loaded — trigger load on all unloaded ads.
+      _logger.logInfo("No loaded ad for $adUnitType, reloading all");
+      for (final ad in ads) {
+        if (!ad.isAdLoaded) ad.load();
+      }
+      _updateAdIndex(adUnitType);
+      return false;
     } catch (e) {
       _logger.logInfo("Error in showing ad: $e");
       return false;
+    }
+  }
+
+  List<ApslAdBase> _adsForType(AdUnitType type) {
+    switch (type) {
+      case AdUnitType.interstitial:
+        return _interstitialAds;
+      case AdUnitType.rewarded:
+        return _rewardedAds;
+      case AdUnitType.appOpen:
+        return _appOpenAds;
+      default:
+        return [];
+    }
+  }
+
+  int _indexForType(AdUnitType type) {
+    switch (type) {
+      case AdUnitType.interstitial:
+        return _interstitialAdIndex;
+      case AdUnitType.rewarded:
+        return _rewardedAdIndex;
+      case AdUnitType.appOpen:
+        return _appOpenAdIndex;
+      default:
+        return 0;
+    }
+  }
+
+  void _setIndexForType(AdUnitType type, int index) {
+    switch (type) {
+      case AdUnitType.interstitial:
+        _interstitialAdIndex = index;
+        break;
+      case AdUnitType.rewarded:
+        _rewardedAdIndex = index;
+        break;
+      case AdUnitType.appOpen:
+        _appOpenAdIndex = index;
+        break;
+      default:
+        break;
     }
   }
 
