@@ -175,12 +175,10 @@ class ApslGamBannerAd extends ApslAdBase {
 
     if (_bannerAd == null || !_isAdLoaded) {
       if (!_isLoading) load();
-      return _config.loadingWidget ??
-          SizedBox(
-            height: adSize.height.toDouble(),
-            width: adSize.width.toDouble(),
-            child: const Center(child: CircularProgressIndicator()),
-          );
+      // Collapse to zero height while loading (or after a failure that will
+      // retry) instead of reserving adSize.height — an unfilled banner should
+      // occupy no space. Hosts can opt into a placeholder via loadingWidget.
+      return _config.loadingWidget ?? const SizedBox.shrink();
     }
 
     return Container(

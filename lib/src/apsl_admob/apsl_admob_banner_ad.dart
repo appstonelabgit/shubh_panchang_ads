@@ -221,14 +221,12 @@ class ApslAdmobBannerAd extends ApslAdBase {
         load();
       }
 
-      return _config.loadingWidget ??
-          SizedBox(
-            height: adSize.height.toDouble(),
-            width: adSize.width.toDouble(),
-            child: const Center(
-              child: CircularProgressIndicator(),
-            ),
-          );
+      // Collapse to zero height while loading (or after a failure that will
+      // retry): reserving adSize.height for an ad that may never fill leaves a
+      // blank band in the layout. Hosts that WANT a placeholder can opt in via
+      // _config.loadingWidget. Once the ad fills, show() returns the sized
+      // Container below and the space appears only when there's real fill.
+      return _config.loadingWidget ?? const SizedBox.shrink();
     }
 
     return Container(
