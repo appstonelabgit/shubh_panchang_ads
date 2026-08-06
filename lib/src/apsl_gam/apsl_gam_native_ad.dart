@@ -207,9 +207,9 @@ class ApslGamNativeAd extends ApslAdBase {
     }
     return Center(
       child: SizedBox(
-        width: 400,
+        width: double.infinity,
         height:
-            customHeight ?? (_templateType == TemplateType.small ? 120 : 350),
+            customHeight ?? (_templateType == TemplateType.small ? 100 : 350),
         child: AdWidget(ad: _nativeAd!),
       ),
     );

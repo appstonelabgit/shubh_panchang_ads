@@ -83,6 +83,7 @@ class _ApslNativeAdState extends State<ApslNativeAd> {
       nativeTemplateStyle: widget.nativeTemplateStyle,
       templateType: _currentTemplateType,
       config: _currentConfig,
+      customHeight: widget.customHeight,
       onAdFailedToLoad: widget.onAdFailedToLoad,
       onAdShowed: widget.onAdShowed,
     );

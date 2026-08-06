@@ -12,6 +12,11 @@ class ApslSequenceNativeAd extends StatefulWidget {
   final ApslAdCallback? onAdFailedToLoad;
   final NativeAdConfig? config;
 
+  /// Optional fixed height for the rendered native ad. Forwarded to the
+  /// underlying network ad so callers can tighten the band around the
+  /// template content instead of the package default.
+  final double? customHeight;
+
   /// Duration before retrying after all networks are exhausted.
   final Duration recoveryDelay;
 
@@ -24,6 +29,7 @@ class ApslSequenceNativeAd extends StatefulWidget {
     this.nativeTemplateStyle,
     this.templateType = TemplateType.medium,
     this.config,
+    this.customHeight,
     this.onAdShowed,
     this.onAdFailedToLoad,
     this.recoveryDelay = const Duration(seconds: 45),
@@ -114,6 +120,7 @@ class _ApslSequenceNativeAdState extends State<ApslSequenceNativeAd> {
       nativeTemplateStyle: widget.nativeTemplateStyle,
       templateType: widget.templateType,
       config: widget.config,
+      customHeight: widget.customHeight,
       onAdShowed: widget.onAdShowed,
       onAdFailedToLoad: widget.onAdFailedToLoad,
     );

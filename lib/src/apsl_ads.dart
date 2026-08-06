@@ -293,6 +293,7 @@ class ApslAds {
     NativeAdConfig? config,
     ApslAdCallback? onAdFailedToLoad,
     ApslAdCallback? onAdShowed,
+    double? customHeight,
   }) {
     ApslAdBase? ad;
     final nativeId = adIdManager.getAppIds(adNetwork).nativeId;
@@ -307,6 +308,7 @@ class ApslAds {
             nativeTemplateStyle: nativeTemplateStyle,
             templateType: templateType,
             config: config,
+            customHeight: customHeight,
           );
           _eventController.setupEvents(ad);
           if (onAdFailedToLoad != null) ad.addOnAdFailedToLoad(onAdFailedToLoad);
@@ -321,6 +323,7 @@ class ApslAds {
             nativeTemplateStyle: nativeTemplateStyle,
             templateType: templateType,
             config: config,
+            customHeight: customHeight,
           );
           _eventController.setupEvents(ad);
           if (onAdFailedToLoad != null) ad.addOnAdFailedToLoad(onAdFailedToLoad);
