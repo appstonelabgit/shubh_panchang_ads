@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:apsl_ads/apsl_ads.dart';
 import 'package:apsl_ads/src/utils/ad_error_mapper.dart';
+import 'package:apsl_ads/src/utils/native_template_size.dart';
 import 'package:apsl_ads/src/utils/load_retry_governor.dart';
 import 'package:apsl_ads/src/utils/retry_policy.dart';
 import 'package:flutter/material.dart';
@@ -221,8 +222,10 @@ class ApslGamNativeAd extends ApslAdBase {
     return Center(
       child: SizedBox(
         width: double.infinity,
-        height:
-            customHeight ?? (_templateType == TemplateType.small ? 100 : 350),
+        height: customHeight ??
+            (_templateType == TemplateType.small
+                ? smallNativeTemplateHeight
+                : mediumNativeTemplateHeight),
         child: AdWidget(ad: _nativeAd!),
       ),
     );

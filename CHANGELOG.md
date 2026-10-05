@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.1
+
+- The small native template's box is 108 pt high (was 100). On iOS its
+  media view is square and up to a quarter of the ad's width, about 101 pt
+  on a Pro Max, so a 100 pt box cut it off and AdMob's validator reported
+  "advertiser assets outside native ad view". The validator's "MediaView is
+  too small for video" warning remains: the template's media view can't
+  reach 120 pt; a custom layout is planned.
+
 ## 1.2.0
 
 Load and show pacing for AdMob's frequency caps.
