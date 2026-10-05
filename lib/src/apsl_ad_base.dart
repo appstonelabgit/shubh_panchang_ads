@@ -41,6 +41,7 @@ abstract class ApslAdBase {
   final List<ApslAdCallback> _onBannerAdReadyListeners = [];
   final List<ApslAdCallback> _onNativeAdReadyListeners = [];
   final List<ApslAdCallback> _onEarnedRewardListeners = [];
+  final List<ApslAdCallback> _onAdShowSkippedListeners = [];
 
   // ─── Listener registration ────────────────────────────────────────────
   // Each `addOn*` method appends to the corresponding list. This is the
@@ -79,8 +80,10 @@ abstract class ApslAdBase {
       _onNativeAdReadyListeners.add(cb);
 
   /// Adds a listener for rewarded-ad earned-reward events.
-  void addOnEarnedReward(ApslAdCallback cb) =>
-      _onEarnedRewardListeners.add(cb);
+  void addOnEarnedReward(ApslAdCallback cb) => _onEarnedRewardListeners.add(cb);
+
+  void addOnAdShowSkipped(ApslAdCallback cb) =>
+      _onAdShowSkippedListeners.add(cb);
 
   /// Removes all registered listeners. Subclasses should call this from
   /// [dispose] to release closure references and avoid leaks.
@@ -94,6 +97,7 @@ abstract class ApslAdBase {
     _onBannerAdReadyListeners.clear();
     _onNativeAdReadyListeners.clear();
     _onEarnedRewardListeners.clear();
+    _onAdShowSkippedListeners.clear();
   }
 
   // ─── Dispatchers (used by subclasses) ─────────────────────────────────
@@ -102,16 +106,13 @@ abstract class ApslAdBase {
   // its handler) doesn't cause a ConcurrentModificationError.
 
   @protected
-  void fireAdLoaded(Object? data) =>
-      _fanOut(_onAdLoadedListeners, data);
+  void fireAdLoaded(Object? data) => _fanOut(_onAdLoadedListeners, data);
 
   @protected
-  void fireAdShowed(Object? data) =>
-      _fanOut(_onAdShowedListeners, data);
+  void fireAdShowed(Object? data) => _fanOut(_onAdShowedListeners, data);
 
   @protected
-  void fireAdClicked(Object? data) =>
-      _fanOut(_onAdClickedListeners, data);
+  void fireAdClicked(Object? data) => _fanOut(_onAdClickedListeners, data);
 
   @protected
   void fireAdFailedToLoad(Object? data, String errorMessage) =>
@@ -121,9 +122,14 @@ abstract class ApslAdBase {
   void fireAdFailedToShow(Object? data, String errorMessage) =>
       _fanOut(_onAdFailedToShowListeners, data, errorMessage: errorMessage);
 
+  /// A show request declined before reaching the SDK; [reason] is a short
+  /// code such as `cooldown`, `showing`, `background`, `not_loaded`.
   @protected
-  void fireAdDismissed(Object? data) =>
-      _fanOut(_onAdDismissedListeners, data);
+  void fireAdShowSkipped(String reason) =>
+      _fanOut(_onAdShowSkippedListeners, null, errorMessage: reason);
+
+  @protected
+  void fireAdDismissed(Object? data) => _fanOut(_onAdDismissedListeners, data);
 
   @protected
   void fireBannerAdReadyForSetState(Object? data) =>

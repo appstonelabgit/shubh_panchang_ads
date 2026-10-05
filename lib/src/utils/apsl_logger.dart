@@ -101,6 +101,10 @@ class ApslLogger {
       case AdEventType.earnedReward:
         _onEarnedReward(event);
         break;
+      case AdEventType.adShowSkipped:
+        _logger.i(
+            '${event.adUnitType?.name ?? 'ad'} show skipped (${event.error}) on ${event.adNetwork.value}.');
+        break;
     }
   }
 }

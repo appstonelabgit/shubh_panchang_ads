@@ -6,24 +6,26 @@ import 'package:apsl_ads/src/enums/ad_error_type.dart';
 import 'package:apsl_ads/src/enums/ad_network.dart';
 import 'package:apsl_ads/src/enums/ad_unit_type.dart';
 import 'package:apsl_ads/src/utils/ad_error_mapper.dart';
-import 'package:apsl_ads/src/utils/retry_policy.dart';
+import 'package:apsl_ads/src/utils/load_retry_governor.dart';
 import 'package:google_mobile_ads/google_mobile_ads.dart';
 
-/// A class that encapsulates the logic for AdMob's Interstitial Ads.
+/// AdMob interstitial ads.
 ///
-/// This class handles the creation, loading, and display of AdMob interstitial
-/// ads. It includes configurable retry logic with exponential backoff,
-/// error-code-based classification, and timeout support. Stale callbacks
-/// from a load that has already been cancelled by a timeout are ignored via
-/// a generation token.
+/// Keeps at most one cached ad. It reloads once right after a show (the
+/// next one is then ready well inside the app's cooldown) and otherwise only
+/// when asked; failures go through [LoadRetryGovernor] instead of a backoff
+/// loop. A cached ad older than [InterstitialAdConfig.maxCacheAge] is
+/// dropped. Stale callbacks from a superseded load are ignored via a
+/// generation token.
 class ApslAdmobInterstitialAd extends ApslAdBase {
   final AdRequest _adRequest;
   final InterstitialAdConfig _config;
+  final LoadRetryGovernor _governor;
 
   InterstitialAd? _interstitialAd;
-  bool _isAdLoaded = false;
+  DateTime? _loadedAt;
   bool _isLoading = false;
-  int _retryCount = 0;
+  bool _isShowing = false;
   Timer? _retryTimer;
   Timer? _loadTimeoutTimer;
 
@@ -32,13 +34,20 @@ class ApslAdmobInterstitialAd extends ApslAdBase {
   /// timed out) check this and bail out instead of clobbering newer state.
   int _loadGeneration = 0;
 
-  /// Creates a new [ApslAdmobInterstitialAd] instance
   ApslAdmobInterstitialAd(
     super.adUnitId, {
     AdRequest? adRequest,
     InterstitialAdConfig? config,
   })  : _adRequest = adRequest ?? const AdRequest(),
-        _config = config ?? const InterstitialAdConfig();
+        _config = config ?? const InterstitialAdConfig(),
+        _governor = LoadRetryGovernor(
+          adUnitId: adUnitId,
+          adNetwork: AdNetwork.admob,
+          adUnitType: AdUnitType.interstitial,
+          capCooldown: (config ?? const InterstitialAdConfig()).capCooldown,
+          noFillRetryDelay:
+              (config ?? const InterstitialAdConfig()).noFillRetryDelay,
+        );
 
   @override
   AdNetwork get adNetwork => AdNetwork.admob;
@@ -47,29 +56,49 @@ class ApslAdmobInterstitialAd extends ApslAdBase {
   AdUnitType get adUnitType => AdUnitType.interstitial;
 
   @override
-  bool get isAdLoaded => _isAdLoaded;
+  bool get isAdLoaded => _interstitialAd != null && !_isStale;
 
-  /// Gets the current retry count
-  int get retryCount => _retryCount;
+  bool get _isStale {
+    final loadedAt = _loadedAt;
+    return loadedAt != null &&
+        DateTime.now().difference(loadedAt) > _config.maxCacheAge;
+  }
 
   @override
   void dispose() {
-    _isAdLoaded = false;
     _isLoading = false;
+    _isShowing = false;
     _retryTimer?.cancel();
     _retryTimer = null;
     _loadTimeoutTimer?.cancel();
     _loadTimeoutTimer = null;
-    _retryCount = 0;
     _loadGeneration++; // invalidate any in-flight callbacks
-    _interstitialAd?.dispose();
-    _interstitialAd = null;
+    _dropCached();
     clearListeners();
   }
 
+  void _dropCached() {
+    _interstitialAd?.dispose();
+    _interstitialAd = null;
+    _loadedAt = null;
+  }
+
+  /// A load the app asked for. Our own retry goes through [_load] with
+  /// `isRetry: true`, so it can't reset the retry budget.
   @override
-  Future<void> load() async {
-    if (_isAdLoaded || _isLoading) return;
+  Future<void> load() => _load(isRetry: false);
+
+  Future<void> _load({required bool isRetry}) async {
+    if (_isStale) _dropCached();
+    if (isAdLoaded || _isLoading) return;
+
+    final String? malformed = _governor.validateFormat();
+    if (malformed != null) {
+      fireAdFailedToLoad(null, malformed);
+      return;
+    }
+    if (!_governor.canLoad) return;
+    if (!isRetry) _governor.onNaturalLoad();
 
     _isLoading = true;
     _loadTimeoutTimer?.cancel();
@@ -77,15 +106,14 @@ class ApslAdmobInterstitialAd extends ApslAdBase {
 
     final generation = ++_loadGeneration;
 
-    // Setup timeout if configured
     final timeout = _config.loadTimeout;
     if (timeout != null) {
       _loadTimeoutTimer = Timer(timeout, () {
-        if (generation != _loadGeneration || _isAdLoaded) return;
+        if (generation != _loadGeneration || isAdLoaded) return;
         _isLoading = false;
         _handleError(
           AdErrorType.timeout,
-          errorMessage: 'Interstitial ad load timed out',
+          errorMessage: 'AdMob interstitial ad load timed out',
         );
       });
     }
@@ -103,16 +131,15 @@ class ApslAdmobInterstitialAd extends ApslAdBase {
             }
             _interstitialAd?.dispose();
             _interstitialAd = ad;
-            _isAdLoaded = true;
+            _loadedAt = DateTime.now();
             _isLoading = false;
-            _retryCount = 0;
             _loadTimeoutTimer?.cancel();
+            _governor.onLoaded();
             fireAdLoaded(ad);
           },
           onAdFailedToLoad: (LoadAdError error) {
             if (generation != _loadGeneration) return;
             _interstitialAd = null;
-            _isAdLoaded = false;
             _isLoading = false;
             _loadTimeoutTimer?.cancel();
             _handleError(
@@ -130,32 +157,33 @@ class ApslAdmobInterstitialAd extends ApslAdBase {
     }
   }
 
-  /// Handles ad load errors, retrying with exponential backoff if enabled
-  /// and under [InterstitialAdConfig.maxRetries].
   void _handleError(AdErrorType errorType, {String? errorMessage}) {
-    fireAdFailedToLoad(null, errorMessage ?? errorType.message);
+    final decision = _governor.onFailure(errorType, message: errorMessage);
+    fireAdFailedToLoad(
+      null,
+      decision.disabledNow
+          ? 'Unit disabled for this session: '
+              '${DisabledAdUnits.reasonFor(adUnitId)}'
+          : errorMessage ?? errorType.message,
+    );
 
-    if (!_config.enableAutoRetry || !isErrorRetryable(errorType)) return;
-    if (_retryCount >= _config.maxRetries) return;
-
-    final delay = _config.useExponentialBackoff
-        ? nextBackoff(
-            _retryCount,
-            base: _config.retryDelay,
-            maxDelay: _config.maxRetryDelay,
-          )
-        : _config.retryDelay;
-    _retryCount++;
-    _retryTimer = Timer(delay, () {
-      if (!_isAdLoaded && !_isLoading) load();
+    final retryAfter = decision.retryAfter;
+    if (!_config.enableAutoRetry || retryAfter == null) return;
+    _retryTimer?.cancel();
+    _retryTimer = Timer(retryAfter, () {
+      if (!isAdLoaded && !_isLoading) _load(isRetry: true);
     });
   }
 
   @override
   void show() {
+    if (_isShowing) return fireAdShowSkipped('showing');
+    if (!isAppInForeground) return fireAdShowSkipped('background');
+    if (_isStale) _dropCached();
     final ad = _interstitialAd;
-    if (ad == null || !_isAdLoaded) return;
+    if (ad == null) return fireAdShowSkipped('not_loaded');
 
+    _isShowing = true;
     ad.fullScreenContentCallback = FullScreenContentCallback(
       onAdShowedFullScreenContent: (InterstitialAd ad) {
         fireAdShowed(ad);
@@ -174,29 +202,23 @@ class ApslAdmobInterstitialAd extends ApslAdBase {
     ad.show();
 
     _interstitialAd = null;
-    _isAdLoaded = false;
+    _loadedAt = null;
   }
 
-  /// Cleans up the ad and optionally reloads for next use
+  /// Disposes the shown ad and loads the next one — the single load after a
+  /// show that keeps an ad ready for the next allowed slot.
   void _cleanAndReload(InterstitialAd ad) {
     ad.dispose();
-    _interstitialAd = null;
-    _isAdLoaded = false;
+    _isShowing = false;
     _isLoading = false;
 
     if (_config.autoReloadAfterShow) {
-      load(); // Preload next ad
+      load();
     }
   }
 
-  /// Manually triggers a retry of the ad load.
-  ///
-  /// Resets the retry counter so the user-initiated retry gets a fresh
-  /// budget of [InterstitialAdConfig.maxRetries] attempts.
-  Future<void> retry() async {
-    _retryCount = 0;
-    await load();
-  }
+  /// Manually triggers a load with a fresh retry budget.
+  Future<void> retry() => load();
 
   /// Gets the current configuration
   InterstitialAdConfig get config => _config;

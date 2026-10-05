@@ -9,6 +9,7 @@ import 'package:apsl_ads/src/apsl_gam/apsl_gam_banner_ad.dart'; // ignore: unnec
 import 'package:apsl_ads/src/apsl_gam/apsl_gam_interstitial_ad.dart'; // ignore: unnecessary_import
 import 'package:apsl_ads/src/apsl_gam/apsl_gam_native_ad.dart'; // ignore: unnecessary_import
 import 'package:apsl_ads/src/utils/ad_load_resumer.dart';
+import 'package:apsl_ads/src/utils/app_open_pacing.dart';
 import 'package:apsl_ads/src/utils/apsl_event_controller.dart';
 import 'package:apsl_ads/src/utils/apsl_logger.dart';
 import 'package:apsl_ads/src/utils/auto_hiding_loader_dialogue.dart';
@@ -37,6 +38,18 @@ class ApslAds {
 
   List<ApslAdBase> get _allAds =>
       [..._interstitialAds, ..._rewardedAds, ..._appOpenAds];
+
+  /// What the resume / reconnect reloader may warm. Rewarded ads load only
+  /// when the user asks for one.
+  List<ApslAdBase> get _autoLoadableAds =>
+      [..._interstitialAds, ..._appOpenAds];
+
+  /// Cooldown and minimum session for every app-open unit.
+  final AppOpenPacing appOpenPacing = AppOpenPacing();
+
+  /// False skips every Google Ad Manager unit (app open, interstitial,
+  /// banner, native) — for apps whose GAM units are unused.
+  bool _enableAdManager = true;
 
   /// All the App Open Ads ads will be stored in it
   final List<ApslAdBase> _appOpenAds = [];
@@ -92,11 +105,28 @@ class ApslAds {
     int showNavigationAdAfterCount = 1,
     InterstitialAdConfig? interstitialAdConfig,
     RewardedAdConfig? rewardedAdConfig,
+    Duration? interstitialCooldown,
+    Duration appOpenCooldown = const Duration(hours: 4),
+    int appOpenMinSessions = 3,
+    int sessionNumber = 0,
+    DateTime? appOpenLastShownAt,
+    bool enableAdManager = true,
   }) async {
     _showAdBadge = showAdBadge;
     _showNavigationAdAfterCount = showNavigationAdAfterCount;
-    _interstitialAdConfig = interstitialAdConfig ?? const InterstitialAdConfig();
+    _interstitialAdConfig =
+        interstitialAdConfig ?? const InterstitialAdConfig();
+    if (interstitialCooldown != null) {
+      _interstitialAdConfig =
+          _interstitialAdConfig.copyWith(capCooldown: interstitialCooldown);
+    }
     _rewardedAdConfig = rewardedAdConfig ?? const RewardedAdConfig();
+    appOpenPacing
+      ..cooldown = appOpenCooldown
+      ..minSessions = appOpenMinSessions
+      ..sessionNumber = sessionNumber
+      ..lastShownAt = appOpenLastShownAt;
+    _enableAdManager = enableAdManager;
     if (enableLogger) _logger.enable(enableLogger);
     adIdManager = manager;
     if (adMobAdRequest != null) {
@@ -151,6 +181,7 @@ class ApslAds {
           break;
 
         case AdNetwork.adManager:
+          if (!_enableAdManager) break;
           // GAM uses the same Google Mobile Ads SDK — initialize once.
           if (!_isMobileAdNetworkInitialized) {
             final response = await MobileAds.instance.initialize();
@@ -184,7 +215,8 @@ class ApslAds {
     // Begin watching for connectivity / lifecycle signals so any ad that
     // exhausts its retry budget on a flaky network gets a fresh chance
     // when the network recovers — without users having to restart the app.
-    _loadResumer ??= AdLoadResumer(adsProvider: () => _allAds)..start();
+    _loadResumer ??= AdLoadResumer(adsProvider: () => _autoLoadableAds)
+      ..start();
   }
 
   /// Creates a banner ad for the specified ad network.
@@ -235,20 +267,22 @@ class ApslAds {
             config: config,
           );
           _eventController.setupEvents(ad);
-          if (onAdFailedToLoad != null) ad.addOnAdFailedToLoad(onAdFailedToLoad);
+          if (onAdFailedToLoad != null)
+            ad.addOnAdFailedToLoad(onAdFailedToLoad);
           if (onAdShowed != null) ad.addOnAdShowed(onAdShowed);
         }
         break;
 
       case AdNetwork.adManager:
-        if (bannerId != null && bannerId.isNotEmpty) {
+        if (_enableAdManager && bannerId != null && bannerId.isNotEmpty) {
           ad = ApslGamBannerAd(
             bannerId,
             adSize: adSize,
             config: config,
           );
           _eventController.setupEvents(ad);
-          if (onAdFailedToLoad != null) ad.addOnAdFailedToLoad(onAdFailedToLoad);
+          if (onAdFailedToLoad != null)
+            ad.addOnAdFailedToLoad(onAdFailedToLoad);
           if (onAdShowed != null) ad.addOnAdShowed(onAdShowed);
         }
         break;
@@ -311,13 +345,14 @@ class ApslAds {
             customHeight: customHeight,
           );
           _eventController.setupEvents(ad);
-          if (onAdFailedToLoad != null) ad.addOnAdFailedToLoad(onAdFailedToLoad);
+          if (onAdFailedToLoad != null)
+            ad.addOnAdFailedToLoad(onAdFailedToLoad);
           if (onAdShowed != null) ad.addOnAdShowed(onAdShowed);
         }
         break;
 
       case AdNetwork.adManager:
-        if (nativeId != null && nativeId.isNotEmpty) {
+        if (_enableAdManager && nativeId != null && nativeId.isNotEmpty) {
           ad = ApslGamNativeAd(
             nativeId,
             nativeTemplateStyle: nativeTemplateStyle,
@@ -326,7 +361,8 @@ class ApslAds {
             customHeight: customHeight,
           );
           _eventController.setupEvents(ad);
-          if (onAdFailedToLoad != null) ad.addOnAdFailedToLoad(onAdFailedToLoad);
+          if (onAdFailedToLoad != null)
+            ad.addOnAdFailedToLoad(onAdFailedToLoad);
           if (onAdShowed != null) ad.addOnAdShowed(onAdShowed);
         }
         break;
@@ -378,9 +414,7 @@ class ApslAds {
       );
       _rewardedAds.add(ad);
       _eventController.setupEvents(ad);
-      if (_rewardedAdConfig.preLoadRewardedAds) {
-        ad.load();
-      }
+      // Never preloaded: loadAndShowRewardedAd loads one when asked.
     }
 
     // App Open
@@ -394,6 +428,7 @@ class ApslAds {
       final appOpenAdManager = ApslAdmobAppOpenAd(
         appOpenAdUnitId,
         _adRequest,
+        pacing: appOpenPacing,
       );
 
       // Silent preload — do NOT auto-show on first load (that bug used to
@@ -440,7 +475,10 @@ class ApslAds {
           AdUnitType.appOpen,
           appOpenAdUnitId,
         )) {
-      final appOpenAdManager = ApslGamAppOpenAd(appOpenAdUnitId);
+      final appOpenAdManager = ApslGamAppOpenAd(
+        appOpenAdUnitId,
+        pacing: appOpenPacing,
+      );
       appOpenAdManager.load();
 
       if (isShowAppOpenOnAppStateChange && _appLifecycleReactor == null) {

@@ -6,23 +6,23 @@ import 'package:apsl_ads/src/enums/ad_error_type.dart';
 import 'package:apsl_ads/src/enums/ad_network.dart';
 import 'package:apsl_ads/src/enums/ad_unit_type.dart';
 import 'package:apsl_ads/src/utils/ad_error_mapper.dart';
-import 'package:apsl_ads/src/utils/retry_policy.dart';
+import 'package:apsl_ads/src/utils/load_retry_governor.dart';
 import 'package:google_mobile_ads/google_mobile_ads.dart';
 
 /// A class that encapsulates the logic for AdMob's Rewarded Ads.
 ///
-/// Includes configurable retry logic with exponential backoff, error-code-
-/// based classification, timeout support, and a generation token to discard
-/// stale callbacks from a load that has already been cancelled.
+/// Loads only on demand, with a timeout and a generation token to discard
+/// stale callbacks from a load that has already been cancelled. Never
+/// preloads, retries in the background, or reloads after a show.
 class ApslAdmobRewardedAd extends ApslAdBase {
   final AdRequest _adRequest;
   final RewardedAdConfig _config;
+  final LoadRetryGovernor _governor;
+  bool _isShowing = false;
 
   RewardedAd? _rewardedAd;
   bool _isAdLoaded = false;
   bool _isLoading = false;
-  int _retryCount = 0;
-  Timer? _retryTimer;
   Timer? _loadTimeoutTimer;
   int _loadGeneration = 0;
 
@@ -32,7 +32,12 @@ class ApslAdmobRewardedAd extends ApslAdBase {
     AdRequest? adRequest,
     RewardedAdConfig? config,
   })  : _adRequest = adRequest ?? const AdRequest(),
-        _config = config ?? const RewardedAdConfig();
+        _config = config ?? const RewardedAdConfig(),
+        _governor = LoadRetryGovernor(
+          adUnitId: adUnitId,
+          adNetwork: AdNetwork.admob,
+          adUnitType: AdUnitType.rewarded,
+        );
 
   @override
   AdNetwork get adNetwork => AdNetwork.admob;
@@ -43,20 +48,14 @@ class ApslAdmobRewardedAd extends ApslAdBase {
   @override
   bool get isAdLoaded => _isAdLoaded;
 
-  /// Gets the current retry count
-  int get retryCount => _retryCount;
-
   @override
   void dispose() {
     _rewardedAd?.dispose();
     _rewardedAd = null;
     _isAdLoaded = false;
     _isLoading = false;
-    _retryTimer?.cancel();
-    _retryTimer = null;
     _loadTimeoutTimer?.cancel();
     _loadTimeoutTimer = null;
-    _retryCount = 0;
     _loadGeneration++;
     clearListeners();
   }
@@ -64,10 +63,15 @@ class ApslAdmobRewardedAd extends ApslAdBase {
   @override
   Future<void> load() async {
     if (_isLoading || _isAdLoaded) return;
+    final String? malformed = _governor.validateFormat();
+    if (malformed != null) {
+      fireAdFailedToLoad(null, malformed);
+      return;
+    }
+    if (!_governor.canLoad) return;
 
     _isLoading = true;
     _loadTimeoutTimer?.cancel();
-    _retryTimer?.cancel();
 
     final generation = ++_loadGeneration;
 
@@ -97,7 +101,7 @@ class ApslAdmobRewardedAd extends ApslAdBase {
             _rewardedAd = ad;
             _isAdLoaded = true;
             _isLoading = false;
-            _retryCount = 0;
+            _governor.onLoaded();
             _loadTimeoutTimer?.cancel();
             fireAdLoaded(ad);
           },
@@ -122,41 +126,40 @@ class ApslAdmobRewardedAd extends ApslAdBase {
     }
   }
 
-  /// Handles ad load errors, retrying with exponential backoff if enabled
-  /// and under [RewardedAdConfig.maxRetries].
+  /// Rewarded ads load only on demand ([ApslAds.loadAndShowRewardedAd]),
+  /// whose caller is waiting with a timeout — so a failure is reported and
+  /// never retried in the background. A unit that can never load is
+  /// disabled for the session with one clear event.
   void _handleError(AdErrorType errorType, {String? errorMessage}) {
-    fireAdFailedToLoad(null, errorMessage ?? errorType.message);
-
-    if (!_config.enableAutoRetry || !isErrorRetryable(errorType)) return;
-    if (_retryCount >= _config.maxRetries) return;
-
-    final delay = _config.useExponentialBackoff
-        ? nextBackoff(
-            _retryCount,
-            base: _config.retryDelay,
-            maxDelay: _config.maxRetryDelay,
-          )
-        : _config.retryDelay;
-    _retryCount++;
-    _retryTimer = Timer(delay, () {
-      if (!_isAdLoaded && !_isLoading) load();
-    });
+    final decision = _governor.onFailure(errorType, message: errorMessage);
+    fireAdFailedToLoad(
+      null,
+      decision.disabledNow
+          ? 'Unit disabled for this session: '
+              '${DisabledAdUnits.reasonFor(adUnitId)}'
+          : errorMessage ?? errorType.message,
+    );
   }
 
   @override
   dynamic show() {
     final ad = _rewardedAd;
-    if (ad == null || !_isAdLoaded) return;
+    if (_isShowing) return fireAdShowSkipped('showing');
+    if (!isAppInForeground) return fireAdShowSkipped('background');
+    if (ad == null || !_isAdLoaded) return fireAdShowSkipped('not_loaded');
+    _isShowing = true;
 
     ad.fullScreenContentCallback = FullScreenContentCallback(
       onAdShowedFullScreenContent: (RewardedAd ad) {
         fireAdShowed(ad);
       },
       onAdDismissedFullScreenContent: (RewardedAd ad) {
+        _isShowing = false;
         fireAdDismissed(ad);
         _cleanAndReload(ad);
       },
       onAdFailedToShowFullScreenContent: (RewardedAd ad, AdError error) {
+        _isShowing = false;
         fireAdFailedToShow(ad, error.toString());
         _cleanAndReload(ad);
       },
@@ -176,29 +179,12 @@ class ApslAdmobRewardedAd extends ApslAdBase {
     _isAdLoaded = false;
   }
 
-  /// Cleans up the ad and optionally reloads for next use.
-  ///
-  /// The reload is gated only on [RewardedAdConfig.autoReloadAfterShow]
-  /// — `preLoadRewardedAds` controls whether the *initial* preload happens
-  /// at app start, but post-show preloading is what gives the next user tap
-  /// an instant ad and is the single biggest revenue lever for rewarded.
+  /// Cleans up the shown ad. No reload: the next one loads when the user
+  /// asks for it.
   void _cleanAndReload(RewardedAd ad) {
     ad.dispose();
     _rewardedAd = null;
     _isAdLoaded = false;
-
-    if (_config.autoReloadAfterShow) {
-      load();
-    }
-  }
-
-  /// Manually triggers a retry of the ad load.
-  ///
-  /// Resets the retry counter so the user-initiated retry gets a fresh
-  /// budget of [RewardedAdConfig.maxRetries] attempts.
-  Future<void> retry() async {
-    _retryCount = 0;
-    await load();
   }
 
   /// Gets the current configuration

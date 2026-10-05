@@ -12,6 +12,11 @@ enum AdEventType {
   adFailedToLoad,
   adFailedToShow,
   earnedReward,
+
+  /// A show request was declined without asking the SDK — cooldown, already
+  /// showing, app in the background, nothing cached. [AdEvent.error] holds
+  /// the reason. Not a failure: nothing was requested.
+  adShowSkipped,
 }
 
 extension AdEventTypeExtension on AdEventType {

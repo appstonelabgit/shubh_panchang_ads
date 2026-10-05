@@ -24,7 +24,12 @@ import 'package:google_mobile_ads/google_mobile_ads.dart';
 /// * 5 — timeout
 /// * 11 — invalid argument
 /// * 17 — application identifier missing
+///
+/// Two conditions share codes with no-fill / invalid request and are told
+/// apart by their message: a frequency cap and a unit of the wrong format.
 AdErrorType mapLoadAdError(LoadAdError error) {
+  final AdErrorType? byMessage = errorTypeFromMessage(error.message);
+  if (byMessage != null) return byMessage;
   if (Platform.isIOS) {
     switch (error.code) {
       case 0:
@@ -58,6 +63,20 @@ AdErrorType mapLoadAdError(LoadAdError error) {
   }
 }
 
+/// The error types only an SDK message reveals, or null.
+AdErrorType? errorTypeFromMessage(String message) {
+  final m = message.toLowerCase();
+  if (m.contains('frequency cap') || m.contains('frequency-cap')) {
+    return AdErrorType.frequencyCapped;
+  }
+  if (m.contains("doesn't match format") ||
+      m.contains('does not match format') ||
+      m.contains("doesn't match the format")) {
+    return AdErrorType.wrongFormat;
+  }
+  return null;
+}
+
 /// Returns whether a given error type should be retried at all.
 ///
 /// Misconfiguration errors (invalid ad unit / missing app id) will never
@@ -66,6 +85,8 @@ AdErrorType mapLoadAdError(LoadAdError error) {
 bool isErrorRetryable(AdErrorType type) {
   switch (type) {
     case AdErrorType.invalidAdUnit:
+    case AdErrorType.wrongFormat:
+    case AdErrorType.frequencyCapped:
       return false;
     case AdErrorType.networkError:
     case AdErrorType.noFill:

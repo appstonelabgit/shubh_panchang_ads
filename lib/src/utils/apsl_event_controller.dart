@@ -45,6 +45,23 @@ class ApslEventController {
     ad.addOnAdFailedToShow(_onAdFailedToShowMethod);
     ad.addOnAdDismissed(_onAdDismissedMethod);
     ad.addOnEarnedReward(_onEarnedRewardMethod);
+    ad.addOnAdShowSkipped(_onAdShowSkippedMethod);
+  }
+
+  void _onAdShowSkippedMethod(
+    AdNetwork adNetwork,
+    AdUnitType adUnitType,
+    Object? data, {
+    String? errorMessage,
+    String? rewardType,
+    num? rewardAmount,
+  }) {
+    _addEvent(AdEvent(
+      type: AdEventType.adShowSkipped,
+      adNetwork: adNetwork,
+      adUnitType: adUnitType,
+      error: errorMessage,
+    ));
   }
 
   void _addEvent(AdEvent event) {

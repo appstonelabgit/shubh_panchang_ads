@@ -17,6 +17,14 @@ enum AdErrorType {
 
   /// Unknown or unspecified error
   unknown,
+
+  /// AdMob refused the request because the unit's frequency cap is reached.
+  /// Every retry inside the cap window is another refused request.
+  frequencyCapped,
+
+  /// The unit exists but is set up for a different format (a banner id
+  /// used for a native, say). It will never load as this format.
+  wrongFormat,
 }
 
 /// Extension to provide user-friendly error messages
@@ -36,6 +44,10 @@ extension AdErrorTypeExtension on AdErrorType {
         return 'Internal SDK error occurred';
       case AdErrorType.unknown:
         return 'Unknown error occurred while loading ad';
+      case AdErrorType.frequencyCapped:
+        return 'Ad unit frequency cap reached';
+      case AdErrorType.wrongFormat:
+        return "Ad unit doesn't match the requested format";
     }
   }
 }

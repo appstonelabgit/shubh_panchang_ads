@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:apsl_ads/apsl_ads.dart';
 import 'package:apsl_ads/src/utils/ad_error_mapper.dart';
+import 'package:apsl_ads/src/utils/load_retry_governor.dart';
 import 'package:apsl_ads/src/utils/retry_policy.dart';
 import 'package:flutter/material.dart';
 
@@ -76,6 +77,16 @@ class ApslAdmobNativeAd extends ApslAdBase {
   @override
   Future<void> load() async {
     if (_isLoading || _isAdLoaded) return;
+    if (DisabledAdUnits.isDisabled(adUnitId)) {
+      _maxRetriesReached = true;
+      return;
+    }
+    final String? malformed = checkUnitShape(adUnitId, adNetwork, adUnitType);
+    if (malformed != null) {
+      _maxRetriesReached = true;
+      fireAdFailedToLoad(null, malformed);
+      return;
+    }
     _isLoading = true;
     _impressionFired = false;
     _loadTimeoutTimer?.cancel();
@@ -157,9 +168,11 @@ class ApslAdmobNativeAd extends ApslAdBase {
 
   /// Handles ad load errors, retrying with exponential backoff if enabled
   /// and under [NativeAdConfig.maxRetries].
-  void _handleError(AdErrorType errorType,
-      {String? errorMessage, Object? ad}) {
-    fireAdFailedToLoad(ad, errorMessage ?? errorType.message);
+  void _handleError(AdErrorType errorType, {String? errorMessage, Object? ad}) {
+    if (!silenceDeadUnit(
+        adUnitId, adUnitType, errorType, errorMessage ?? errorType.message)) {
+      fireAdFailedToLoad(ad, errorMessage ?? errorType.message);
+    }
 
     final canRetry = _config.enableAutoRetry &&
         isErrorRetryable(errorType) &&
@@ -232,8 +245,8 @@ class ApslAdmobNativeAd extends ApslAdBase {
     return Center(
       child: SizedBox(
         width: double.infinity,
-        height: customHeight ??
-            (_templateType == TemplateType.small ? 100 : 350),
+        height:
+            customHeight ?? (_templateType == TemplateType.small ? 100 : 350),
         child: AdWidget(ad: _nativeAd!),
       ),
     );

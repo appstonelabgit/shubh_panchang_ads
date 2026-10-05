@@ -6,6 +6,7 @@ import 'package:apsl_ads/src/enums/ad_error_type.dart';
 import 'package:apsl_ads/src/enums/ad_network.dart';
 import 'package:apsl_ads/src/enums/ad_unit_type.dart';
 import 'package:apsl_ads/src/utils/ad_error_mapper.dart';
+import 'package:apsl_ads/src/utils/load_retry_governor.dart';
 import 'package:apsl_ads/src/utils/retry_policy.dart';
 import 'package:flutter/material.dart';
 import 'package:google_mobile_ads/google_mobile_ads.dart';
@@ -76,7 +77,9 @@ class ApslGamBannerAd extends ApslAdBase {
     _isLoading = false;
     _cancelTimers();
 
-    fireAdFailedToLoad(ad, errorMessage);
+    if (!silenceDeadUnit(adUnitId, adUnitType, errorType, errorMessage)) {
+      fireAdFailedToLoad(ad, errorMessage);
+    }
     ad?.dispose();
 
     final canRetry = _config.enableAutoRetry &&
@@ -103,6 +106,18 @@ class ApslGamBannerAd extends ApslAdBase {
   Future<void> load() async {
     if (_isLoading) return;
     if (_isAdLoaded && _bannerAd != null) return;
+    if (DisabledAdUnits.isDisabled(adUnitId)) {
+      _maxRetriesReached = true;
+      fireBannerAdReadyForSetState(null);
+      return;
+    }
+    final String? malformed = checkUnitShape(adUnitId, adNetwork, adUnitType);
+    if (malformed != null) {
+      _maxRetriesReached = true;
+      fireAdFailedToLoad(null, malformed);
+      fireBannerAdReadyForSetState(null);
+      return;
+    }
 
     _isLoading = true;
     _cancelTimers();

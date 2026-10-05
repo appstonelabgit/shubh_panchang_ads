@@ -2,37 +2,43 @@ import 'dart:async';
 
 import 'package:apsl_ads/apsl_ads.dart';
 import 'package:apsl_ads/src/utils/ad_error_mapper.dart';
-import 'package:apsl_ads/src/utils/retry_policy.dart';
+import 'package:apsl_ads/src/utils/app_open_pacing.dart';
+import 'package:apsl_ads/src/utils/load_retry_governor.dart';
 
 /// AdMob implementation of App Open ads.
 ///
-/// Handles the load → show → reload cycle with bounded exponential backoff,
-/// expiry-aware caching (AdMob app-open ads expire after 4 hours), and a
-/// cancellable retry timer that is properly torn down on [dispose].
+/// Never shows late: [show] uses a cached, unexpired ad or shows nothing and
+/// refreshes silently for the next time. [AppOpenPacing] holds the 4 h
+/// cooldown and the minimum session; no load starts inside the cooldown.
+/// Load failures go through [LoadRetryGovernor].
 class ApslAdmobAppOpenAd extends ApslAdBase {
   /// Maximum age of a cached app open ad before AdMob considers it stale.
   static const Duration maxCacheDuration = Duration(hours: 4);
 
-  /// Default max retry attempts on load failure.
-  static const int defaultMaxRetries = 5;
-
   final AdRequest adRequest;
-  final int maxRetries;
+  final AppOpenPacing pacing;
+  final LoadRetryGovernor _governor;
 
   AppOpenAd? _appOpenAd;
   DateTime? _appOpenLoadTime;
 
   bool _isShowingAd = false;
   bool _isLoading = false;
-  int _retryCount = 0;
   Timer? _retryTimer;
   int _loadGeneration = 0;
 
   ApslAdmobAppOpenAd(
     super.adUnitId,
     this.adRequest, {
-    this.maxRetries = defaultMaxRetries,
-  });
+    AppOpenPacing? pacing,
+    Duration capCooldown = const Duration(hours: 4),
+  })  : pacing = pacing ?? AppOpenPacing(),
+        _governor = LoadRetryGovernor(
+          adUnitId: adUnitId,
+          adNetwork: AdNetwork.admob,
+          adUnitType: AdUnitType.appOpen,
+          capCooldown: capCooldown,
+        );
 
   @override
   AdNetwork get adNetwork => AdNetwork.admob;
@@ -55,33 +61,35 @@ class ApslAdmobAppOpenAd extends ApslAdBase {
     _retryTimer?.cancel();
     _retryTimer = null;
     _loadGeneration++;
-    _appOpenAd?.dispose();
-    _appOpenAd = null;
-    _appOpenLoadTime = null;
+    _dropCached();
     _isShowingAd = false;
     _isLoading = false;
-    _retryCount = 0;
     clearListeners();
   }
 
-  /// Silently preloads an app open ad. Use this for background warming
-  /// (cold start, post-dismiss). Does NOT auto-show on success.
+  void _dropCached() {
+    _appOpenAd?.dispose();
+    _appOpenAd = null;
+    _appOpenLoadTime = null;
+  }
+
+  /// Silently preloads an app open ad. Never shows on its own.
   @override
-  Future<void> load() => _load(showAdOnLoad: false);
+  Future<void> load() => _load(isRetry: false);
 
-  /// Loads the app open ad and shows it as soon as it is ready.
-  ///
-  /// Use this when you want a "load and show now" flow (e.g. an explicit
-  /// user-initiated splash). For background preloading at app start, use
-  /// [load] instead.
-  Future<void> loadAndShow() => _load(showAdOnLoad: true);
+  Future<void> _load({required bool isRetry}) async {
+    if (_isExpired) _dropCached();
+    if (isAdLoaded || forceStopToLoadAds || _isLoading) return;
+    // No point holding an ad through a cooldown it would expire inside.
+    if (pacing.inCooldown) return;
 
-  Future<void> _load({bool showAdOnLoad = false}) async {
-    if (isAdLoaded) {
-      if (showAdOnLoad) show();
+    final String? malformed = _governor.validateFormat();
+    if (malformed != null) {
+      fireAdFailedToLoad(null, malformed);
       return;
     }
-    if (forceStopToLoadAds || _isLoading) return;
+    if (!_governor.canLoad) return;
+    if (!isRetry) _governor.onNaturalLoad();
 
     _isLoading = true;
     _retryTimer?.cancel();
@@ -101,64 +109,55 @@ class ApslAdmobAppOpenAd extends ApslAdBase {
             _appOpenAd = ad;
             _appOpenLoadTime = DateTime.now();
             _isLoading = false;
-            _retryCount = 0;
+            _governor.onLoaded();
             fireAdLoaded(ad);
-
-            if (showAdOnLoad) show();
           },
           onAdFailedToLoad: (LoadAdError error) {
             if (generation != _loadGeneration) return;
             _appOpenAd = null;
             _isLoading = false;
-            fireAdFailedToLoad(error, error.toString());
-            _scheduleRetry(error, showAdOnLoad: showAdOnLoad);
+            _handleError(mapLoadAdError(error), error.toString());
           },
         ),
       );
     } catch (e) {
       if (generation != _loadGeneration) return;
       _isLoading = false;
-      fireAdFailedToLoad(null, e.toString());
+      _handleError(AdErrorType.unknown, e.toString());
     }
   }
 
-  /// Schedules a bounded, exponentially-backed-off retry. Errors that
-  /// can't recover (invalid ad unit / missing app id) are not retried.
-  void _scheduleRetry(LoadAdError error, {required bool showAdOnLoad}) {
-    final type = mapLoadAdError(error);
-    if (!isErrorRetryable(type)) return;
-    if (_retryCount >= maxRetries) return;
-
-    final delay = nextBackoff(_retryCount);
-    _retryCount++;
-    _retryTimer = Timer(delay, () {
-      if (!isAdLoaded && !_isLoading) _load(showAdOnLoad: showAdOnLoad);
+  void _handleError(AdErrorType type, String message) {
+    final decision = _governor.onFailure(type, message: message);
+    fireAdFailedToLoad(
+      null,
+      decision.disabledNow
+          ? 'Unit disabled for this session: '
+              '${DisabledAdUnits.reasonFor(adUnitId)}'
+          : message,
+    );
+    final retryAfter = decision.retryAfter;
+    if (retryAfter == null) return;
+    _retryTimer?.cancel();
+    _retryTimer = Timer(retryAfter, () {
+      if (!isAdLoaded && !_isLoading) _load(isRetry: true);
     });
   }
 
   @override
   void show() {
-    // Expired cache → refresh and auto-show on success.
-    if (_appOpenAd != null && _isExpired) {
-      _appOpenAd?.dispose();
-      _appOpenAd = null;
-      _appOpenLoadTime = null;
-      fireAdFailedToShow(null, 'Cached ad expired. Loading a fresh one.');
-      _load(showAdOnLoad: true);
-      return;
-    }
+    final String? paced = pacing.skipReason;
+    if (paced != null) return fireAdShowSkipped(paced);
+    if (_isShowingAd) return fireAdShowSkipped('showing');
+    if (!isAppInForeground) return fireAdShowSkipped('background');
 
     if (!isAdLoaded) {
-      fireAdFailedToShow(
-        null,
-        'No ad loaded. Triggered load and will auto-show if successful.',
-      );
-      _load(showAdOnLoad: true);
-      return;
-    }
-
-    if (_isShowingAd) {
-      fireAdFailedToShow(null, 'Ad is already being shown.');
+      // Refresh for next time; this resume gets no ad. Showing whatever
+      // loads in a few seconds would put it over the screen the user has
+      // already started using.
+      if (_isExpired) _dropCached();
+      fireAdShowSkipped('not_loaded');
+      load();
       return;
     }
 
@@ -168,6 +167,7 @@ class ApslAdmobAppOpenAd extends ApslAdBase {
 
     _appOpenAd!.fullScreenContentCallback = FullScreenContentCallback(
       onAdShowedFullScreenContent: (AppOpenAd ad) {
+        pacing.recordShown();
         fireAdShowed(ad);
       },
       onAdDismissedFullScreenContent: (AppOpenAd ad) {
@@ -176,8 +176,8 @@ class ApslAdmobAppOpenAd extends ApslAdBase {
         _appOpenAd = null;
         _appOpenLoadTime = null;
         fireAdDismissed(ad);
-        // Pre-warm the next ad so the next foreground is instant.
-        _load(showAdOnLoad: false);
+        // No reload here: the cooldown that just started outlasts any ad
+        // loaded now. The next resume after it refreshes.
       },
       onAdFailedToShowFullScreenContent: (AppOpenAd ad, AdError error) {
         _isShowingAd = false;
@@ -185,8 +185,6 @@ class ApslAdmobAppOpenAd extends ApslAdBase {
         _appOpenAd = null;
         _appOpenLoadTime = null;
         fireAdFailedToShow(ad, error.toString());
-        // Try again so the slot doesn't stay dead.
-        _load(showAdOnLoad: false);
       },
     );
 
