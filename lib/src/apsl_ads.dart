@@ -110,6 +110,7 @@ class ApslAds {
     int appOpenMinSessions = 3,
     int sessionNumber = 0,
     DateTime? appOpenLastShownAt,
+    Duration appOpenPreloadLead = const Duration(minutes: 30),
     bool enableAdManager = true,
   }) async {
     _showAdBadge = showAdBadge;
@@ -125,7 +126,8 @@ class ApslAds {
       ..cooldown = appOpenCooldown
       ..minSessions = appOpenMinSessions
       ..sessionNumber = sessionNumber
-      ..lastShownAt = appOpenLastShownAt;
+      ..lastShownAt = appOpenLastShownAt
+      ..preloadLead = appOpenPreloadLead;
     _enableAdManager = enableAdManager;
     if (enableLogger) _logger.enable(enableLogger);
     adIdManager = manager;
@@ -488,6 +490,24 @@ class ApslAds {
       }
       _appOpenAds.add(appOpenAdManager);
       _eventController.setupEvents(appOpenAdManager);
+    }
+  }
+
+  /// Shows the app-open ad if one is cached. Otherwise loads one and shows
+  /// it only if it arrives within [timeout] while [stillEligible] holds;
+  /// after that this request gets no ad (`adShowSkipped` with `timeout`,
+  /// `screen` or `not_loaded`).
+  void showAppOpenWithin(
+    Duration timeout, {
+    bool Function()? stillEligible,
+  }) {
+    for (final ad in _appOpenAds) {
+      if (ad is ApslAdmobAppOpenAd) {
+        return ad.showWithin(timeout, stillEligible: stillEligible);
+      }
+      if (ad is ApslGamAppOpenAd) {
+        return ad.showWithin(timeout, stillEligible: stillEligible);
+      }
     }
   }
 

@@ -8,9 +8,12 @@ import 'package:apsl_ads/src/utils/load_retry_governor.dart';
 /// AdMob implementation of App Open ads.
 ///
 /// Never shows late: [show] uses a cached, unexpired ad or shows nothing and
-/// refreshes silently for the next time. [AppOpenPacing] holds the 4 h
-/// cooldown and the minimum session; no load starts inside the cooldown.
-/// Load failures go through [LoadRetryGovernor].
+/// refreshes silently for the next time; [showWithin] waits a few seconds
+/// for a load and gives up after that. [AppOpenPacing] holds the 4 h
+/// cooldown and the minimum session; the next ad is preloaded in the
+/// cooldown's last half hour while the app is in the foreground.
+/// Load failures go through [LoadRetryGovernor]; a frequency-cap error
+/// does not block later loads, the next natural trigger tries again.
 class ApslAdmobAppOpenAd extends ApslAdBase {
   /// Maximum age of a cached app open ad before AdMob considers it stale.
   static const Duration maxCacheDuration = Duration(hours: 4);
@@ -25,20 +28,25 @@ class ApslAdmobAppOpenAd extends ApslAdBase {
   bool _isShowingAd = false;
   bool _isLoading = false;
   Timer? _retryTimer;
+  Timer? _preloadTimer;
+  Timer? _awaitedTimer;
+  AwaitedAppOpenShow? _awaited;
   int _loadGeneration = 0;
 
   ApslAdmobAppOpenAd(
     super.adUnitId,
     this.adRequest, {
     AppOpenPacing? pacing,
-    Duration capCooldown = const Duration(hours: 4),
+    Duration capCooldown = Duration.zero,
   })  : pacing = pacing ?? AppOpenPacing(),
         _governor = LoadRetryGovernor(
           adUnitId: adUnitId,
           adNetwork: AdNetwork.admob,
           adUnitType: AdUnitType.appOpen,
           capCooldown: capCooldown,
-        );
+        ) {
+    _schedulePreload();
+  }
 
   @override
   AdNetwork get adNetwork => AdNetwork.admob;
@@ -60,6 +68,11 @@ class ApslAdmobAppOpenAd extends ApslAdBase {
   void dispose() {
     _retryTimer?.cancel();
     _retryTimer = null;
+    _preloadTimer?.cancel();
+    _preloadTimer = null;
+    _awaitedTimer?.cancel();
+    _awaitedTimer = null;
+    _awaited = null;
     _loadGeneration++;
     _dropCached();
     _isShowingAd = false;
@@ -80,8 +93,9 @@ class ApslAdmobAppOpenAd extends ApslAdBase {
   Future<void> _load({required bool isRetry}) async {
     if (_isExpired) _dropCached();
     if (isAdLoaded || forceStopToLoadAds || _isLoading) return;
-    // No point holding an ad through a cooldown it would expire inside.
-    if (pacing.inCooldown) return;
+    // No point holding an ad through a cooldown it would expire inside;
+    // the last half hour of it is the preload window.
+    if (!pacing.canLoad) return;
 
     final String? malformed = _governor.validateFormat();
     if (malformed != null) {
@@ -111,6 +125,7 @@ class ApslAdmobAppOpenAd extends ApslAdBase {
             _isLoading = false;
             _governor.onLoaded();
             fireAdLoaded(ad);
+            _resolveAwaited(loaded: true);
           },
           onAdFailedToLoad: (LoadAdError error) {
             if (generation != _loadGeneration) return;
@@ -129,6 +144,7 @@ class ApslAdmobAppOpenAd extends ApslAdBase {
 
   void _handleError(AdErrorType type, String message) {
     final decision = _governor.onFailure(type, message: message);
+    _resolveAwaited(loaded: false);
     fireAdFailedToLoad(
       null,
       decision.disabledNow
@@ -144,10 +160,65 @@ class ApslAdmobAppOpenAd extends ApslAdBase {
     });
   }
 
+  /// Loads the next ad once the cooldown reaches its preload window, if the
+  /// app is in the foreground then; otherwise the next resume's show request
+  /// starts the load.
+  void _schedulePreload() {
+    _preloadTimer?.cancel();
+    _preloadTimer = null;
+    if (!pacing.inCooldown) return;
+    _preloadTimer = Timer(pacing.timeUntilPreload, () {
+      _preloadTimer = null;
+      if (isAppInForeground) load();
+    });
+  }
+
+  /// Shows a cached ad now. With nothing cached, starts a load and shows
+  /// the ad only if it arrives within [timeout] and [stillEligible] still
+  /// holds; otherwise this request gets no ad and a late arrival stays
+  /// cached for the next one.
+  void showWithin(Duration timeout, {bool Function()? stillEligible}) {
+    if (isAdLoaded ||
+        pacing.skipReason != null ||
+        _isShowingAd ||
+        !isAppInForeground) {
+      return show();
+    }
+    if (_awaited != null) return;
+    load();
+    if (!_isLoading) return fireAdShowSkipped('not_loaded');
+    _awaited = AwaitedAppOpenShow(
+      deadline: DateTime.now().add(timeout),
+      stillEligible: stillEligible,
+    );
+    _awaitedTimer?.cancel();
+    _awaitedTimer = Timer(timeout, () {
+      if (_awaited == null) return;
+      _awaited = null;
+      fireAdShowSkipped('timeout');
+    });
+  }
+
+  void _resolveAwaited({required bool loaded}) {
+    final awaited = _awaited;
+    if (awaited == null) return;
+    _awaited = null;
+    _awaitedTimer?.cancel();
+    _awaitedTimer = null;
+    if (!loaded) return fireAdShowSkipped('not_loaded');
+    final String? skip = awaited.skipReasonAt(DateTime.now());
+    if (skip != null) return fireAdShowSkipped(skip);
+    show();
+  }
+
   @override
   void show() {
     final String? paced = pacing.skipReason;
-    if (paced != null) return fireAdShowSkipped(paced);
+    if (paced != null) {
+      // A return inside the preload window caches the ad for the next one.
+      if (pacing.inCooldown) load();
+      return fireAdShowSkipped(paced);
+    }
     if (_isShowingAd) return fireAdShowSkipped('showing');
     if (!isAppInForeground) return fireAdShowSkipped('background');
 
@@ -168,6 +239,7 @@ class ApslAdmobAppOpenAd extends ApslAdBase {
     _appOpenAd!.fullScreenContentCallback = FullScreenContentCallback(
       onAdShowedFullScreenContent: (AppOpenAd ad) {
         pacing.recordShown();
+        _schedulePreload();
         fireAdShowed(ad);
       },
       onAdDismissedFullScreenContent: (AppOpenAd ad) {

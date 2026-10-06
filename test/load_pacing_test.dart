@@ -150,5 +150,81 @@ void main() {
       p.recordShown();
       expect(p.inCooldown, isTrue);
     });
+
+    test('loads again only in the last half hour of the cooldown', () {
+      final p = AppOpenPacing(sessionNumber: 5, clock: clock);
+      expect(p.canLoad, isTrue);
+      p.recordShown();
+      expect(p.canLoad, isFalse);
+      expect(p.timeUntilPreload, const Duration(hours: 3, minutes: 30));
+
+      now = now.add(const Duration(hours: 3, minutes: 29));
+      expect(p.canLoad, isFalse);
+      now = now.add(const Duration(minutes: 1));
+      expect(p.canLoad, isTrue);
+      expect(p.timeUntilPreload, Duration.zero);
+      // Loadable, still not showable.
+      expect(p.skipReason, 'cooldown');
+
+      now = now.add(const Duration(minutes: 30));
+      expect(p.canLoad, isTrue);
+      expect(p.skipReason, isNull);
+    });
+
+    test('the preload lead follows the configured cooldown', () {
+      final p = AppOpenPacing(
+        cooldown: const Duration(hours: 2),
+        preloadLead: const Duration(minutes: 10),
+        lastShownAt: now,
+        clock: clock,
+      );
+      expect(p.timeUntilPreload, const Duration(hours: 1, minutes: 50));
+    });
+  });
+
+  group('AwaitedAppOpenShow', () {
+    test('shows an ad that arrives inside the window', () {
+      final a = AwaitedAppOpenShow(
+        deadline: now.add(const Duration(seconds: 3)),
+      );
+      expect(a.skipReasonAt(now.add(const Duration(seconds: 2))), isNull);
+      expect(a.skipReasonAt(now.add(const Duration(seconds: 3))), isNull);
+    });
+
+    test('never shows one that arrives late', () {
+      final a = AwaitedAppOpenShow(
+        deadline: now.add(const Duration(seconds: 3)),
+      );
+      expect(
+        a.skipReasonAt(now.add(const Duration(milliseconds: 3001))),
+        'timeout',
+      );
+    });
+
+    test('skips when the user has moved to another screen', () {
+      var onSameScreen = true;
+      final a = AwaitedAppOpenShow(
+        deadline: now.add(const Duration(seconds: 3)),
+        stillEligible: () => onSameScreen,
+      );
+      expect(a.skipReasonAt(now.add(const Duration(seconds: 1))), isNull);
+      onSameScreen = false;
+      expect(a.skipReasonAt(now.add(const Duration(seconds: 1))), 'screen');
+    });
+  });
+
+  group('app-open frequency cap', () {
+    test('a cap error does not block the next natural load', () {
+      final g = LoadRetryGovernor(
+        adUnitId: 'ca-app-pub-1/3',
+        adNetwork: AdNetwork.admob,
+        adUnitType: AdUnitType.appOpen,
+        capCooldown: Duration.zero,
+        clock: clock,
+      );
+      final d = g.onFailure(AdErrorType.frequencyCapped);
+      expect(d.retryAfter, isNull);
+      expect(g.canLoad, isTrue);
+    });
   });
 }

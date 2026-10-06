@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.2.2
+
+App open: back to one ad per cooldown without late ads.
+
+- The next ad is preloaded in the last `appOpenPreloadLead` (default
+  30 min) of the cooldown while the app is in the foreground, so the first
+  resume after the cooldown has one cached. This needs AdMob's own cap on
+  the unit to be shorter than the cooldown minus the lead (e.g. a 3 h cap
+  under a 4 h cooldown).
+- `ApslAds.showAppOpenWithin(timeout, stillEligible:)`: shows a cached ad,
+  or loads one and shows it only if it arrives within the timeout while
+  `stillEligible` holds. Otherwise `adShowSkipped` with `timeout`, `screen`
+  or `not_loaded`; a late ad stays cached for the next request.
+- A frequency-cap error no longer blocks app-open loads for four hours; the
+  next natural trigger tries again.
+
 ## 1.2.1
 
 - The small native template's box is 108 pt high (was 100). On iOS its
