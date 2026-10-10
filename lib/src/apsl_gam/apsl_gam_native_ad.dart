@@ -12,11 +12,16 @@ import 'package:flutter/material.dart';
 /// Uses [NativeAd.fromAdManagerRequest] factory constructor with
 /// [AdManagerAdRequest] instead of the standard [AdRequest]-based constructor.
 /// Otherwise identical to [ApslAdmobNativeAd] in behavior and retry logic.
+///
+/// Supports both template and custom factory rendering paths; see
+/// [ApslAdmobNativeAd] documentation for details.
 class ApslGamNativeAd extends ApslAdBase {
   final NativeTemplateStyle? nativeTemplateStyle;
   final TemplateType _templateType;
   final NativeAdConfig _config;
   final double? customHeight;
+  final String? factoryId;
+  final Map<String, Object>? customOptions;
 
   NativeAd? _nativeAd;
   bool _isAdLoaded = false;
@@ -28,12 +33,19 @@ class ApslGamNativeAd extends ApslAdBase {
   int _loadGeneration = 0;
   bool _impressionFired = false;
 
+  /// Creates a new [ApslGamNativeAd] instance.
+  ///
+  /// Either supply [nativeTemplateStyle] / [templateType] for Google's built-in
+  /// templates, OR supply [factoryId] / [customOptions] for a custom factory
+  /// layout. The two paths are mutually exclusive.
   ApslGamNativeAd(
     super.adUnitId, {
     this.nativeTemplateStyle,
     TemplateType? templateType,
     NativeAdConfig? config,
     this.customHeight,
+    this.factoryId,
+    this.customOptions,
   })  : _templateType = templateType ?? TemplateType.medium,
         _config = config ?? const NativeAdConfig();
 
@@ -105,54 +117,72 @@ class ApslGamNativeAd extends ApslAdBase {
     }
 
     try {
-      _nativeAd = NativeAd.fromAdManagerRequest(
-        adUnitId: adUnitId,
-        listener: NativeAdListener(
-          onAdLoaded: (ad) {
-            if (generation != _loadGeneration) {
-              ad.dispose();
-              return;
-            }
-            _isAdLoaded = true;
-            _isLoading = false;
-            _retryCount = 0;
-            _maxRetriesReached = false;
-            _loadTimeoutTimer?.cancel();
-            _nativeAd = ad as NativeAd?;
-            fireAdLoaded(ad);
-            fireNativeAdReadyForSetState(ad);
-          },
-          onAdFailedToLoad: (ad, error) {
-            if (generation != _loadGeneration) {
-              ad.dispose();
-              return;
-            }
-            _isAdLoaded = false;
-            _isLoading = false;
-            _nativeAd = null;
-            ad.dispose();
-            _loadTimeoutTimer?.cancel();
-            _handleError(
-              mapLoadAdError(error),
-              errorMessage: error.toString(),
-            );
-          },
-          onAdImpression: (ad) {
-            if (_impressionFired) return;
-            _impressionFired = true;
-            fireAdShowed(ad);
-          },
-          onAdClicked: (ad) => fireAdClicked(ad),
-        ),
-        nativeTemplateStyle: nativeTemplateStyle ?? getTemplate(),
-        adManagerRequest: const AdManagerAdRequest(),
-      )..load();
+      // Build the NativeAd with either template or factory layout.
+      // When factoryId is provided, use factoryId + customOptions instead
+      // of nativeTemplateStyle (they are mutually exclusive in google_mobile_ads).
+      if (factoryId != null) {
+        _nativeAd = NativeAd.fromAdManagerRequest(
+          adUnitId: adUnitId,
+          listener: _buildListener(generation),
+          factoryId: factoryId,
+          customOptions: customOptions,
+          adManagerRequest: const AdManagerAdRequest(),
+        )..load();
+      } else {
+        _nativeAd = NativeAd.fromAdManagerRequest(
+          adUnitId: adUnitId,
+          listener: _buildListener(generation),
+          nativeTemplateStyle: nativeTemplateStyle ?? getTemplate(),
+          adManagerRequest: const AdManagerAdRequest(),
+        )..load();
+      }
     } catch (e) {
       if (generation != _loadGeneration) return;
       _isLoading = false;
       _loadTimeoutTimer?.cancel();
       _handleError(AdErrorType.unknown, errorMessage: e.toString());
     }
+  }
+
+  /// Builds the [NativeAdListener] for both template and factory paths.
+  NativeAdListener _buildListener(int generation) {
+    return NativeAdListener(
+      onAdLoaded: (ad) {
+        if (generation != _loadGeneration) {
+          ad.dispose();
+          return;
+        }
+        _isAdLoaded = true;
+        _isLoading = false;
+        _retryCount = 0;
+        _maxRetriesReached = false;
+        _loadTimeoutTimer?.cancel();
+        _nativeAd = ad as NativeAd?;
+        fireAdLoaded(ad);
+        fireNativeAdReadyForSetState(ad);
+      },
+      onAdFailedToLoad: (ad, error) {
+        if (generation != _loadGeneration) {
+          ad.dispose();
+          return;
+        }
+        _isAdLoaded = false;
+        _isLoading = false;
+        _nativeAd = null;
+        ad.dispose();
+        _loadTimeoutTimer?.cancel();
+        _handleError(
+          mapLoadAdError(error),
+          errorMessage: error.toString(),
+        );
+      },
+      onAdImpression: (ad) {
+        if (_impressionFired) return;
+        _impressionFired = true;
+        fireAdShowed(ad);
+      },
+      onAdClicked: (ad) => fireAdClicked(ad),
+    );
   }
 
   void _handleError(AdErrorType errorType, {String? errorMessage, Object? ad}) {

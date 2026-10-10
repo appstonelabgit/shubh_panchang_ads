@@ -17,6 +17,13 @@ class ApslSequenceNativeAd extends StatefulWidget {
   /// template content instead of the package default.
   final double? customHeight;
 
+  /// Optional factoryId for custom native ad layout (see [ApslAdmobNativeAd]).
+  /// When provided, the factory layout is used instead of [nativeTemplateStyle].
+  final String? factoryId;
+
+  /// Optional custom options for the factory layout.
+  final Map<String, Object>? customOptions;
+
   /// Duration before retrying after all networks are exhausted.
   final Duration recoveryDelay;
 
@@ -30,6 +37,8 @@ class ApslSequenceNativeAd extends StatefulWidget {
     this.templateType = TemplateType.medium,
     this.config,
     this.customHeight,
+    this.factoryId,
+    this.customOptions,
     this.onAdShowed,
     this.onAdFailedToLoad,
     this.recoveryDelay = const Duration(seconds: 45),
@@ -121,6 +130,8 @@ class _ApslSequenceNativeAdState extends State<ApslSequenceNativeAd> {
       templateType: widget.templateType,
       config: widget.config,
       customHeight: widget.customHeight,
+      factoryId: widget.factoryId,
+      customOptions: widget.customOptions,
       onAdShowed: widget.onAdShowed,
       onAdFailedToLoad: widget.onAdFailedToLoad,
     );

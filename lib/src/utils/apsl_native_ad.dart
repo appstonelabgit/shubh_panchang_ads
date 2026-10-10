@@ -2,6 +2,10 @@ import 'package:apsl_ads/apsl_ads.dart';
 import 'package:flutter/material.dart';
 
 /// Widget for displaying a native ad with configurable retry and loading behavior.
+///
+/// Supports both template-based (using [nativeTemplateStyle] and [templateType])
+/// and custom factory-based ([factoryId] and [customOptions]) rendering.
+/// When [factoryId] is provided, the template parameters are ignored.
 class ApslNativeAd extends StatefulWidget {
   /// The ad network to use (defaults to AdMob)
   final AdNetwork adNetwork;
@@ -18,6 +22,13 @@ class ApslNativeAd extends StatefulWidget {
   /// Optional height for the native ad
   final double? customHeight;
 
+  /// Optional factoryId for custom native ad layout.
+  /// When provided, uses the factory layout instead of [nativeTemplateStyle].
+  final String? factoryId;
+
+  /// Optional custom options for the factory layout.
+  final Map<String, Object>? customOptions;
+
   /// Optional onAdShowed callback
   final ApslAdCallback? onAdShowed;
 
@@ -30,6 +41,8 @@ class ApslNativeAd extends StatefulWidget {
     this.templateType,
     this.config,
     this.customHeight,
+    this.factoryId,
+    this.customOptions,
     this.onAdShowed,
     this.onAdFailedToLoad,
     super.key,
@@ -84,6 +97,8 @@ class _ApslNativeAdState extends State<ApslNativeAd> {
       templateType: _currentTemplateType,
       config: _currentConfig,
       customHeight: widget.customHeight,
+      factoryId: widget.factoryId,
+      customOptions: widget.customOptions,
       onAdFailedToLoad: widget.onAdFailedToLoad,
       onAdShowed: widget.onAdShowed,
     );

@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.3.0
+
+Native ad custom factory layout path.
+
+- Add `factoryId` and `customOptions` parameters to `ApslAdmobNativeAd`,
+  `ApslGamNativeAd`, `ApslSequenceNativeAd`, and `ApslAds.createNative()` to
+  support custom native ad layouts registered via platform-specific factory
+  methods. When `factoryId` is provided, it takes precedence over
+  `nativeTemplateStyle` (the two rendering paths are mutually exclusive in the
+  underlying Google Mobile Ads SDK).
+- The existing template path (with `nativeTemplateStyle` and `templateType`)
+  remains the default and works unchanged when no `factoryId` is specified.
+- Custom factory layouts can pass theme colours and other options via
+  `customOptions` as a Map.
+- The `customHeight` parameter is available on both paths to set the box
+  height for the rendered ad (existing for templates, now also applicable
+  to factory layouts).
+
 ## 1.2.2
 
 App open: back to one ad per cooldown without late ads.

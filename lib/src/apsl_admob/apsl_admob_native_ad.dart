@@ -8,12 +8,22 @@ import 'package:apsl_ads/src/utils/retry_policy.dart';
 import 'package:flutter/material.dart';
 
 /// A class encapsulating the logic for AdMob's Native Ads.
+///
+/// Supports two rendering paths:
+/// * **Template path (default)**: Uses [nativeTemplateStyle] and [templateType]
+///   for Google's built-in templates (small, medium). See [getTemplate()].
+/// * **Custom factory path**: When [factoryId] is provided, creates a
+///   [NativeAd] with custom [factoryId] and [customOptions] instead of
+///   [nativeTemplateStyle]. The two paths are mutually exclusive in the
+///   underlying SDK; the template path is used when [factoryId] is null.
 class ApslAdmobNativeAd extends ApslAdBase {
   final AdRequest _adRequest;
   final NativeTemplateStyle? nativeTemplateStyle;
   final TemplateType _templateType;
   final NativeAdConfig _config;
   final double? customHeight;
+  final String? factoryId;
+  final Map<String, Object>? customOptions;
 
   NativeAd? _nativeAd;
   bool _isAdLoaded = false;
@@ -28,7 +38,11 @@ class ApslAdmobNativeAd extends ApslAdBase {
   /// exactly one time, regardless of how many widget rebuilds happen.
   bool _impressionFired = false;
 
-  /// Creates a new [ApslAdmobNativeAd] instance
+  /// Creates a new [ApslAdmobNativeAd] instance.
+  ///
+  /// Either supply [nativeTemplateStyle] / [templateType] for Google's built-in
+  /// templates, OR supply [factoryId] / [customOptions] for a custom factory
+  /// layout. The two paths are mutually exclusive.
   ApslAdmobNativeAd(
     super.adUnitId, {
     AdRequest? adRequest,
@@ -36,6 +50,8 @@ class ApslAdmobNativeAd extends ApslAdBase {
     TemplateType? templateType,
     NativeAdConfig? config,
     this.customHeight,
+    this.factoryId,
+    this.customOptions,
   })  : _adRequest = adRequest ?? const AdRequest(),
         _templateType = templateType ?? TemplateType.medium,
         _config = config ?? const NativeAdConfig();
@@ -114,57 +130,75 @@ class ApslAdmobNativeAd extends ApslAdBase {
     }
 
     try {
-      _nativeAd = NativeAd(
-        adUnitId: adUnitId,
-        listener: NativeAdListener(
-          onAdLoaded: (ad) {
-            if (generation != _loadGeneration) {
-              ad.dispose();
-              return;
-            }
-            _isAdLoaded = true;
-            _isLoading = false;
-            _retryCount = 0;
-            _maxRetriesReached = false;
-            _loadTimeoutTimer?.cancel();
-            _nativeAd = ad as NativeAd?;
-            fireAdLoaded(ad);
-            fireNativeAdReadyForSetState(ad);
-          },
-          onAdFailedToLoad: (ad, error) {
-            if (generation != _loadGeneration) {
-              ad.dispose();
-              return;
-            }
-            _isAdLoaded = false;
-            _isLoading = false;
-            _nativeAd = null;
-            ad.dispose();
-            _loadTimeoutTimer?.cancel();
-            _handleError(
-              mapLoadAdError(error),
-              errorMessage: error.toString(),
-            );
-          },
-          onAdImpression: (ad) {
-            // Fire impression callback exactly once per loaded ad. The
-            // SDK guarantees this is called when the ad is actually
-            // visible to the user, which is the right signal for analytics.
-            if (_impressionFired) return;
-            _impressionFired = true;
-            fireAdShowed(ad);
-          },
-          onAdClicked: (ad) => fireAdClicked(ad),
-        ),
-        nativeTemplateStyle: nativeTemplateStyle ?? getTemplate(),
-        request: _adRequest,
-      )..load();
+      // Build the NativeAd with either template or factory layout.
+      // When factoryId is provided, use factoryId + customOptions instead
+      // of nativeTemplateStyle (they are mutually exclusive in google_mobile_ads).
+      if (factoryId != null) {
+        _nativeAd = NativeAd(
+          adUnitId: adUnitId,
+          listener: _buildListener(generation),
+          factoryId: factoryId,
+          customOptions: customOptions,
+          request: _adRequest,
+        )..load();
+      } else {
+        _nativeAd = NativeAd(
+          adUnitId: adUnitId,
+          listener: _buildListener(generation),
+          nativeTemplateStyle: nativeTemplateStyle ?? getTemplate(),
+          request: _adRequest,
+        )..load();
+      }
     } catch (e) {
       if (generation != _loadGeneration) return;
       _isLoading = false;
       _loadTimeoutTimer?.cancel();
       _handleError(AdErrorType.unknown, errorMessage: e.toString());
     }
+  }
+
+  /// Builds the [NativeAdListener] for both template and factory paths.
+  NativeAdListener _buildListener(int generation) {
+    return NativeAdListener(
+      onAdLoaded: (ad) {
+        if (generation != _loadGeneration) {
+          ad.dispose();
+          return;
+        }
+        _isAdLoaded = true;
+        _isLoading = false;
+        _retryCount = 0;
+        _maxRetriesReached = false;
+        _loadTimeoutTimer?.cancel();
+        _nativeAd = ad as NativeAd?;
+        fireAdLoaded(ad);
+        fireNativeAdReadyForSetState(ad);
+      },
+      onAdFailedToLoad: (ad, error) {
+        if (generation != _loadGeneration) {
+          ad.dispose();
+          return;
+        }
+        _isAdLoaded = false;
+        _isLoading = false;
+        _nativeAd = null;
+        ad.dispose();
+        _loadTimeoutTimer?.cancel();
+        _handleError(
+          mapLoadAdError(error),
+          errorMessage: error.toString(),
+        );
+      },
+      onAdImpression: (ad) {
+        // Fire impression callback exactly once per loaded ad. The
+        // SDK guarantees this is called when the ad is actually
+        // visible to the user, which is the right signal for analytics.
+        if (_impressionFired) return;
+        _impressionFired = true;
+        fireAdShowed(ad);
+      },
+      onAdClicked: (ad) => fireAdClicked(ad),
+    );
   }
 
   /// Handles ad load errors, retrying with exponential backoff if enabled

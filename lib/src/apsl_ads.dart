@@ -303,13 +303,19 @@ class ApslAds {
   /// * [nativeTemplateStyle] - Optional styling for the native ad template
   /// * [templateType] - The type of template to use (small, medium, or custom)
   /// * [config] - Optional configuration for retry, loading, and placeholder behavior
+  /// * [customHeight] - Optional fixed height for the ad container
+  /// * [factoryId] - Optional factoryId for custom native ad layout
+  /// * [customOptions] - Optional custom options for the factory layout (Map<String, Object>)
+  ///
+  /// When [factoryId] is provided, it takes precedence over [nativeTemplateStyle]
+  /// (the two rendering paths are mutually exclusive in the underlying SDK).
   ///
   /// Currently supported networks:
   /// * AdMob - Full support with all customization options
   ///
   /// Returns null if the ad network is not supported or if the native ad ID is not configured.
   ///
-  /// Example:
+  /// Example (template path):
   /// ```dart
   /// final nativeAd = ApslAds.instance.createNative(
   ///   adNetwork: AdNetwork.admob,
@@ -317,9 +323,17 @@ class ApslAds {
   ///   config: NativeAdConfig(
   ///     retryDelay: Duration(seconds: 10),
   ///     maxRetries: 5,
-  ///     loadingWidget: CircularProgressIndicator(),
-  ///     loadTimeout: Duration(seconds: 30),
   ///   ),
+  /// );
+  /// ```
+  ///
+  /// Example (factory path):
+  /// ```dart
+  /// final nativeAd = ApslAds.instance.createNative(
+  ///   adNetwork: AdNetwork.admob,
+  ///   factoryId: 'spCard',
+  ///   customOptions: {'backgroundColor': 0xFFFFFFFF as Object},
+  ///   customHeight: 140,
   /// );
   /// ```
   ApslAdBase? createNative({
@@ -330,6 +344,8 @@ class ApslAds {
     ApslAdCallback? onAdFailedToLoad,
     ApslAdCallback? onAdShowed,
     double? customHeight,
+    String? factoryId,
+    Map<String, Object>? customOptions,
   }) {
     ApslAdBase? ad;
     final nativeId = adIdManager.getAppIds(adNetwork).nativeId;
@@ -345,6 +361,8 @@ class ApslAds {
             templateType: templateType,
             config: config,
             customHeight: customHeight,
+            factoryId: factoryId,
+            customOptions: customOptions,
           );
           _eventController.setupEvents(ad);
           if (onAdFailedToLoad != null)
@@ -361,6 +379,8 @@ class ApslAds {
             templateType: templateType,
             config: config,
             customHeight: customHeight,
+            factoryId: factoryId,
+            customOptions: customOptions,
           );
           _eventController.setupEvents(ad);
           if (onAdFailedToLoad != null)
