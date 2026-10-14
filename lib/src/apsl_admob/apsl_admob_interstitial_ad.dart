@@ -56,6 +56,12 @@ class ApslAdmobInterstitialAd extends ApslAdBase {
   AdUnitType get adUnitType => AdUnitType.interstitial;
 
   @override
+  DateTime? get loadBlockedUntil => _governor.blockedUntil;
+
+  @override
+  void blockLoadsUntil(DateTime until) => _governor.blockUntil(until);
+
+  @override
   bool get isAdLoaded => _interstitialAd != null && !_isStale;
 
   bool get _isStale {

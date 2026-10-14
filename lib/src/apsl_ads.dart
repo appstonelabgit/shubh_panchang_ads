@@ -14,6 +14,7 @@ import 'package:apsl_ads/src/utils/apsl_event_controller.dart';
 import 'package:apsl_ads/src/utils/apsl_logger.dart';
 import 'package:apsl_ads/src/utils/auto_hiding_loader_dialogue.dart';
 import 'package:apsl_ads/src/utils/extensions.dart';
+import 'package:apsl_ads/src/utils/load_retry_governor.dart';
 import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
 
@@ -50,6 +51,12 @@ class ApslAds {
   /// False skips every Google Ad Manager unit (app open, interstitial,
   /// banner, native) — for apps whose GAM units are unused.
   bool _enableAdManager = true;
+
+  /// How long an app-open unit stays unrequested after a frequency-cap error.
+  Duration _appOpenCapCooldown = Duration.zero;
+
+  /// Cap blocks an earlier run persisted, applied to each unit as it is made.
+  Map<AdUnitType, DateTime> _loadBlockedUntil = const {};
 
   /// All the App Open Ads ads will be stored in it
   final List<ApslAdBase> _appOpenAds = [];
@@ -95,6 +102,10 @@ class ApslAds {
   /// * Cold start: this future resolves as soon as the SDK reports
   ///   initialized. Ad preloads are kicked off in parallel and tracked in
   ///   the background — they do not block your `runApp` call.
+  /// * [interstitialCooldown] / [appOpenCapCooldown]: after AdMob answers
+  ///   "frequency cap reached", that unit is not requested again for this
+  ///   long. [loadBlockedUntil] carries such blocks over from an earlier run
+  ///   (see [loadBlockedUntilFor]); the app persists them.
   Future<void> initialize(
     AdsIdManager manager, {
     bool isShowAppOpenOnAppStateChange = false,
@@ -111,8 +122,12 @@ class ApslAds {
     int sessionNumber = 0,
     DateTime? appOpenLastShownAt,
     Duration appOpenPreloadLead = const Duration(minutes: 30),
+    Duration appOpenCapCooldown = Duration.zero,
+    Map<AdUnitType, DateTime> loadBlockedUntil = const {},
     bool enableAdManager = true,
   }) async {
+    _appOpenCapCooldown = appOpenCapCooldown;
+    _loadBlockedUntil = loadBlockedUntil;
     _showAdBadge = showAdBadge;
     _showNavigationAdAfterCount = showNavigationAdAfterCount;
     _interstitialAdConfig =
@@ -419,6 +434,7 @@ class ApslAds {
       );
       _interstitialAds.add(ad);
       _eventController.setupEvents(ad);
+      _seedBlock(ad);
       ad.load();
     }
 
@@ -451,7 +467,9 @@ class ApslAds {
         appOpenAdUnitId,
         _adRequest,
         pacing: appOpenPacing,
+        capCooldown: _appOpenCapCooldown,
       );
+      _seedBlock(appOpenAdManager);
 
       // Silent preload — do NOT auto-show on first load (that bug used to
       // pop an app-open ad over the splash screen during cold start).
@@ -486,6 +504,7 @@ class ApslAds {
       );
       _interstitialAds.add(ad);
       _eventController.setupEvents(ad);
+      _seedBlock(ad);
       ad.load();
     }
 
@@ -500,7 +519,9 @@ class ApslAds {
       final appOpenAdManager = ApslGamAppOpenAd(
         appOpenAdUnitId,
         pacing: appOpenPacing,
+        capCooldown: _appOpenCapCooldown,
       );
+      _seedBlock(appOpenAdManager);
       appOpenAdManager.load();
 
       if (isShowAppOpenOnAppStateChange && _appLifecycleReactor == null) {
@@ -511,6 +532,24 @@ class ApslAds {
       _appOpenAds.add(appOpenAdManager);
       _eventController.setupEvents(appOpenAdManager);
     }
+  }
+
+  void _seedBlock(ApslAdBase ad) {
+    final until = _loadBlockedUntil[ad.adUnitType];
+    if (until != null) ad.blockLoadsUntil(until);
+  }
+
+  /// The latest frequency-cap block on any [type] unit, or null when every
+  /// one may load. Read it after an `adFailedToLoad` to persist the block.
+  DateTime? loadBlockedUntilFor(AdUnitType type) {
+    DateTime? latest;
+    for (final ad in _adsForType(type)) {
+      final until = ad.loadBlockedUntil;
+      if (until != null && (latest == null || until.isAfter(latest))) {
+        latest = until;
+      }
+    }
+    return latest;
   }
 
   /// Shows the app-open ad if one is cached. Otherwise loads one and shows
@@ -669,6 +708,10 @@ class ApslAds {
       return false;
     }
 
+    // A full-screen ad asked for while the app is not resumed is refused by
+    // the SDK; no show, and a cached ad stays for the next request.
+    if (!isAppInForeground) return false;
+
     // Fast path: cache hit. Show immediately, no loader, no subscription.
     if (ad.isAdLoaded) {
       ad.show();
@@ -696,6 +739,8 @@ class ApslAds {
       if (event.adNetwork != ad.adNetwork) return;
 
       if (event.type == AdEventType.adLoaded) {
+        // The user may have left the app during the load.
+        if (!isAppInForeground) return finish(false);
         ad.show();
         _updateAdIndex(AdUnitType.rewarded);
         finish(true);
@@ -720,6 +765,15 @@ class ApslAds {
     }
 
     return completer.future;
+  }
+
+  /// Starts loading a rewarded ad without showing it — call it when an offer
+  /// to watch one appears, so the tap finds it ready. Loads nothing when one
+  /// is cached or loading, or the app is in the background.
+  void loadRewardedAd({AdNetwork adNetwork = AdNetwork.any}) {
+    final ad = _fetchAdByTypeAndNetwork(AdUnitType.rewarded, adNetwork);
+    if (ad == null || ad.isAdLoaded || !isAppInForeground) return;
+    ad.load();
   }
 
   ApslAdBase? _fetchAdByTypeAndNetwork(

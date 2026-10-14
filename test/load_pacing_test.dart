@@ -214,17 +214,54 @@ void main() {
   });
 
   group('app-open frequency cap', () {
-    test('a cap error does not block the next natural load', () {
-      final g = LoadRetryGovernor(
-        adUnitId: 'ca-app-pub-1/3',
-        adNetwork: AdNetwork.admob,
-        adUnitType: AdUnitType.appOpen,
-        capCooldown: Duration.zero,
-        clock: clock,
-      );
+    LoadRetryGovernor appOpen(Duration capCooldown) => LoadRetryGovernor(
+          adUnitId: 'ca-app-pub-1/3',
+          adNetwork: AdNetwork.admob,
+          adUnitType: AdUnitType.appOpen,
+          capCooldown: capCooldown,
+          clock: clock,
+        );
+
+    test('with no cap cooldown a cap error does not block the next load', () {
+      final g = appOpen(Duration.zero);
       final d = g.onFailure(AdErrorType.frequencyCapped);
       expect(d.retryAfter, isNull);
       expect(g.canLoad, isTrue);
+      expect(g.blockedUntil, isNull);
+    });
+
+    test('a cap error blocks loads for the cap cooldown', () {
+      final g = appOpen(const Duration(hours: 3));
+      g.onFailure(AdErrorType.frequencyCapped);
+      expect(g.canLoad, isFalse);
+      expect(g.blockedUntil, now.add(const Duration(hours: 3)));
+      now = now.add(const Duration(hours: 3));
+      expect(g.canLoad, isTrue);
+      expect(g.blockedUntil, isNull);
+    });
+  });
+
+  group('persisted cap block', () {
+    test('a block from an earlier run holds until it ends', () {
+      final g = governor();
+      g.blockUntil(now.add(const Duration(minutes: 20)));
+      expect(g.canLoad, isFalse);
+      now = now.add(const Duration(minutes: 20));
+      expect(g.canLoad, isTrue);
+    });
+
+    test('a seeded block never shortens one already in force', () {
+      final g = governor();
+      g.onFailure(AdErrorType.frequencyCapped); // 15 min
+      g.blockUntil(now.add(const Duration(minutes: 5)));
+      expect(g.blockedUntil, now.add(const Duration(minutes: 15)));
+    });
+
+    test('a block already over is ignored', () {
+      final g = governor();
+      g.blockUntil(now.subtract(const Duration(minutes: 1)));
+      expect(g.canLoad, isTrue);
+      expect(g.blockedUntil, isNull);
     });
   });
 }

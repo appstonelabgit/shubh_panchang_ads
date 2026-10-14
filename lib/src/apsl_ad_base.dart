@@ -27,6 +27,14 @@ abstract class ApslAdBase {
 
   dynamic show();
 
+  /// Until when a frequency-cap error stops this unit loading; null when it
+  /// may load. Only full-screen formats that obey a cap report one.
+  DateTime? get loadBlockedUntil => null;
+
+  /// Starts a cap block persisted by an earlier run, so a relaunch does not
+  /// ask a capped unit again. No-op for formats without a cap.
+  void blockLoadsUntil(DateTime until) {}
+
   // ─── Listener storage ──────────────────────────────────────────────────
   // Each event is backed by an unordered list of callbacks. We use a
   // List instead of a Set so a consumer can register the same callback

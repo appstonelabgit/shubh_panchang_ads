@@ -13,14 +13,19 @@ import 'package:google_mobile_ads/google_mobile_ads.dart';
 ///
 /// Loads only on demand, with a timeout and a generation token to discard
 /// stale callbacks from a load that has already been cancelled. Never
-/// preloads, retries in the background, or reloads after a show.
+/// preloads, retries in the background, or reloads after a show. A loaded
+/// ad older than [maxCacheAge] is dropped: AdMob expires rewarded ads after
+/// an hour, and showing an expired one fails.
 class ApslAdmobRewardedAd extends ApslAdBase {
+  static const Duration maxCacheAge = Duration(minutes: 55);
+
   final AdRequest _adRequest;
   final RewardedAdConfig _config;
   final LoadRetryGovernor _governor;
   bool _isShowing = false;
 
   RewardedAd? _rewardedAd;
+  DateTime? _loadedAt;
   bool _isAdLoaded = false;
   bool _isLoading = false;
   Timer? _loadTimeoutTimer;
@@ -46,7 +51,13 @@ class ApslAdmobRewardedAd extends ApslAdBase {
   AdUnitType get adUnitType => AdUnitType.rewarded;
 
   @override
-  bool get isAdLoaded => _isAdLoaded;
+  bool get isAdLoaded => _isAdLoaded && !_isStale;
+
+  bool get _isStale {
+    final loadedAt = _loadedAt;
+    return loadedAt != null &&
+        DateTime.now().difference(loadedAt) > maxCacheAge;
+  }
 
   @override
   void dispose() {
@@ -62,6 +73,7 @@ class ApslAdmobRewardedAd extends ApslAdBase {
 
   @override
   Future<void> load() async {
+    if (_isStale) _cleanAndReload(_rewardedAd);
     if (_isLoading || _isAdLoaded) return;
     final String? malformed = _governor.validateFormat();
     if (malformed != null) {
@@ -99,6 +111,7 @@ class ApslAdmobRewardedAd extends ApslAdBase {
             }
             _rewardedAd?.dispose();
             _rewardedAd = ad;
+            _loadedAt = DateTime.now();
             _isAdLoaded = true;
             _isLoading = false;
             _governor.onLoaded();
@@ -146,7 +159,7 @@ class ApslAdmobRewardedAd extends ApslAdBase {
     final ad = _rewardedAd;
     if (_isShowing) return fireAdShowSkipped('showing');
     if (!isAppInForeground) return fireAdShowSkipped('background');
-    if (ad == null || !_isAdLoaded) return fireAdShowSkipped('not_loaded');
+    if (ad == null || !isAdLoaded) return fireAdShowSkipped('not_loaded');
     _isShowing = true;
 
     ad.fullScreenContentCallback = FullScreenContentCallback(
@@ -176,15 +189,19 @@ class ApslAdmobRewardedAd extends ApslAdBase {
     });
 
     _rewardedAd = null;
+    _loadedAt = null;
     _isAdLoaded = false;
   }
 
   /// Cleans up the shown ad. No reload: the next one loads when the user
   /// asks for it.
-  void _cleanAndReload(RewardedAd ad) {
-    ad.dispose();
-    _rewardedAd = null;
-    _isAdLoaded = false;
+  void _cleanAndReload(RewardedAd? ad) {
+    ad?.dispose();
+    if (identical(ad, _rewardedAd)) {
+      _rewardedAd = null;
+      _loadedAt = null;
+      _isAdLoaded = false;
+    }
   }
 
   /// Gets the current configuration

@@ -13,7 +13,7 @@ import 'package:apsl_ads/src/utils/load_retry_governor.dart';
 /// cooldown and the minimum session; the next ad is preloaded in the
 /// cooldown's last half hour while the app is in the foreground.
 /// Load failures go through [LoadRetryGovernor]; a frequency-cap error
-/// does not block later loads, the next natural trigger tries again.
+/// blocks loads for `capCooldown` (the app's `appOpenCapCooldown`).
 class ApslAdmobAppOpenAd extends ApslAdBase {
   /// Maximum age of a cached app open ad before AdMob considers it stale.
   static const Duration maxCacheDuration = Duration(hours: 4);
@@ -53,6 +53,12 @@ class ApslAdmobAppOpenAd extends ApslAdBase {
 
   @override
   AdUnitType get adUnitType => AdUnitType.appOpen;
+
+  @override
+  DateTime? get loadBlockedUntil => _governor.blockedUntil;
+
+  @override
+  void blockLoadsUntil(DateTime until) => _governor.blockUntil(until);
 
   @override
   bool get isAdLoaded => _appOpenAd != null && !_isExpired;
@@ -186,7 +192,7 @@ class ApslAdmobAppOpenAd extends ApslAdBase {
     }
     if (_awaited != null) return;
     load();
-    if (!_isLoading) return fireAdShowSkipped('not_loaded');
+    if (!_isLoading) return fireAdShowSkipped(_notLoadedReason);
     _awaited = AwaitedAppOpenShow(
       deadline: DateTime.now().add(timeout),
       stillEligible: stillEligible,
@@ -211,6 +217,11 @@ class ApslAdmobAppOpenAd extends ApslAdBase {
     show();
   }
 
+  /// `cap` while AdMob's frequency cap holds the unit, so the app can tell
+  /// a capped resume from a plain miss.
+  String get _notLoadedReason =>
+      _governor.blockedUntil != null ? 'cap' : 'not_loaded';
+
   @override
   void show() {
     final String? paced = pacing.skipReason;
@@ -227,7 +238,7 @@ class ApslAdmobAppOpenAd extends ApslAdBase {
       // loads in a few seconds would put it over the screen the user has
       // already started using.
       if (_isExpired) _dropCached();
-      fireAdShowSkipped('not_loaded');
+      fireAdShowSkipped(_notLoadedReason);
       load();
       return;
     }

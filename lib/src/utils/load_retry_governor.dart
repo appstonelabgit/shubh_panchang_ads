@@ -62,7 +62,17 @@ class LoadRetryGovernor {
   }
 
   /// When the frequency-cap block ends, or null when not blocked.
-  DateTime? get blockedUntil => _blockedUntil;
+  DateTime? get blockedUntil {
+    final until = _blockedUntil;
+    return until != null && _clock().isBefore(until) ? until : null;
+  }
+
+  /// Blocks loads until [until] — a cap block an earlier run persisted.
+  /// Never shortens a block already in force.
+  void blockUntil(DateTime until) {
+    final current = _blockedUntil;
+    if (current == null || until.isAfter(current)) _blockedUntil = until;
+  }
 
   /// A load the app asked for (not one of our own retries) gets a fresh
   /// single retry.

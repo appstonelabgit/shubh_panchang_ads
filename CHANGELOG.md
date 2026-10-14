@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.4.0
+
+Frequency caps that outlive a launch, rewarded warm-up, no background shows.
+
+- `initialize(appOpenCapCooldown:)`: after "frequency cap reached" an
+  app-open unit is not requested again for this long (default zero, the
+  1.2.2 behaviour). Interstitials already used `interstitialCooldown`.
+- `initialize(loadBlockedUntil:)` and `loadBlockedUntilFor(type)`: the app
+  reads a unit's cap block after a failed load, persists it, and hands it
+  back on the next launch, so a relaunch does not ask a capped unit again.
+- App open: a show refused while the unit is capped reports `cap` instead
+  of `not_loaded`.
+- `loadRewardedAd()`: warms a rewarded ad without showing it, for when an
+  offer to watch one appears. Still never preloaded at start or after a
+  dismiss.
+- Rewarded: a loaded ad older than 55 minutes is dropped (AdMob expires
+  them after an hour).
+- `loadAndShowRewardedAd` returns false instead of showing when the app is
+  not resumed, including when the load lands after the user left.
+
 ## 1.3.0
 
 Native ad custom factory layout path.
