@@ -83,6 +83,10 @@ class ApslGamNativeAd extends ApslAdBase {
     if (_isLoading || _isAdLoaded) return;
     if (DisabledAdUnits.isDisabled(adUnitId)) {
       _maxRetriesReached = true;
+      // Hosts reserving space wait for an answer; stay silent and they never
+      // collapse.
+      fireAdFailedToLoad(null, 'unit disabled');
+      fireNativeAdReadyForSetState(null);
       return;
     }
     final String? malformed = checkUnitShape(adUnitId, adNetwork, adUnitType);
