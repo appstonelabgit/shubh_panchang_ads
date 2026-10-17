@@ -34,6 +34,21 @@ class ApslEventController {
     ));
   }
 
+  /// A show request for [adUnitType] that no unit could serve, raised by
+  /// [ApslAds] itself rather than by one ad.
+  void fireShowSkippedEvent(
+    AdNetwork adNetwork,
+    AdUnitType adUnitType,
+    String reason,
+  ) {
+    _addEvent(AdEvent(
+      type: AdEventType.adShowSkipped,
+      adNetwork: adNetwork,
+      adUnitType: adUnitType,
+      error: reason,
+    ));
+  }
+
   /// Subscribes to the lifecycle events of [ad] and forwards them onto
   /// the broadcast stream. Uses the multicast `addOn*` listener API so
   /// that registering here does NOT clobber any other subscribers (e.g.

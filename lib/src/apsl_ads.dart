@@ -636,11 +636,23 @@ class ApslAds {
         if (!ad.isAdLoaded) ad.load();
       }
       _updateAdIndex(adUnitType);
+      _eventController.fireShowSkippedEvent(
+        AdNetwork.any,
+        adUnitType,
+        'not_loaded',
+      );
       return false;
     } catch (e) {
       _logger.logInfo("Error in showing ad: $e");
       return false;
     }
+  }
+
+  /// Registers a full-screen [ad] as `initialize` would, without loading.
+  @visibleForTesting
+  void debugRegister(ApslAdBase ad) {
+    _adsForType(ad.adUnitType).add(ad);
+    _eventController.setupEvents(ad);
   }
 
   List<ApslAdBase> _adsForType(AdUnitType type) {

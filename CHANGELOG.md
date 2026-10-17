@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.4.1
+
+Fixes for ads that failed quietly.
+
+- Sequence banner / native: each instance reports its own load and
+  failure. They no longer listen to `ApslAds.instance.onEvent`, so one
+  unit's failure (including a refresh miss on another route) no longer
+  advances or hides every mounted sequence ad. `ApslSequenceBannerAd`,
+  `ApslSequenceNativeAd`, `ApslBannerAd` and `ApslNativeAd` gain an
+  optional `onAdLoaded`.
+- Banner: a failed refresh keeps the banner already on screen instead of
+  tearing it down; the SDK retries on its own schedule.
+- Native: a unit disabled for the session reports `adFailedToLoad`
+  (`unit disabled`) and a ready signal, so hosts that reserved space
+  collapse instead of waiting forever.
+- Interstitial: a cached ad is dropped as soon as it reaches
+  `maxCacheAge`, not at the next show attempt, and reloaded at once in
+  the foreground or on resume otherwise. `isAdLoaded` turns false with
+  it.
+- `showAd` with no loaded ad of the requested type now emits
+  `adShowSkipped` with `not_loaded` (network `any`) as well as returning
+  false.
+
 ## 1.4.0
 
 Frequency caps that outlive a launch, rewarded warm-up, no background shows.

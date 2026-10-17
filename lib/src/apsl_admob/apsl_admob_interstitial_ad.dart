@@ -7,6 +7,7 @@ import 'package:apsl_ads/src/enums/ad_network.dart';
 import 'package:apsl_ads/src/enums/ad_unit_type.dart';
 import 'package:apsl_ads/src/utils/ad_error_mapper.dart';
 import 'package:apsl_ads/src/utils/load_retry_governor.dart';
+import 'package:flutter/foundation.dart';
 import 'package:google_mobile_ads/google_mobile_ads.dart';
 
 /// AdMob interstitial ads.
@@ -28,6 +29,7 @@ class ApslAdmobInterstitialAd extends ApslAdBase {
   bool _isShowing = false;
   Timer? _retryTimer;
   Timer? _loadTimeoutTimer;
+  Timer? _expiryTimer;
 
   /// Monotonically increasing token used to identify the current in-flight
   /// load. Stale callbacks from a previous load (e.g. one that was already
@@ -78,12 +80,16 @@ class ApslAdmobInterstitialAd extends ApslAdBase {
     _retryTimer = null;
     _loadTimeoutTimer?.cancel();
     _loadTimeoutTimer = null;
+    _expiryTimer?.cancel();
+    _expiryTimer = null;
     _loadGeneration++; // invalidate any in-flight callbacks
     _dropCached();
     clearListeners();
   }
 
   void _dropCached() {
+    _expiryTimer?.cancel();
+    _expiryTimer = null;
     _interstitialAd?.dispose();
     _interstitialAd = null;
     _loadedAt = null;
@@ -135,13 +141,7 @@ class ApslAdmobInterstitialAd extends ApslAdBase {
               ad.dispose();
               return;
             }
-            _interstitialAd?.dispose();
-            _interstitialAd = ad;
-            _loadedAt = DateTime.now();
-            _isLoading = false;
-            _loadTimeoutTimer?.cancel();
-            _governor.onLoaded();
-            fireAdLoaded(ad);
+            _onLoaded(ad);
           },
           onAdFailedToLoad: (LoadAdError error) {
             if (generation != _loadGeneration) return;
@@ -162,6 +162,33 @@ class ApslAdmobInterstitialAd extends ApslAdBase {
       _handleError(AdErrorType.unknown, errorMessage: e.toString());
     }
   }
+
+  void _onLoaded(InterstitialAd ad) {
+    _interstitialAd?.dispose();
+    _interstitialAd = ad;
+    _loadedAt = DateTime.now();
+    _isLoading = false;
+    _loadTimeoutTimer?.cancel();
+    _governor.onLoaded();
+    _expiryTimer?.cancel();
+    _expiryTimer = Timer(_config.maxCacheAge, () => _expire(ad));
+    fireAdLoaded(ad);
+  }
+
+  /// Drops [ad] once it is too old to show, so [isAdLoaded] turns false
+  /// without waiting for a show attempt. In the background the reload is
+  /// left to [AdLoadResumer], which loads every unloaded interstitial on
+  /// resume.
+  void _expire(InterstitialAd ad) {
+    _expiryTimer = null;
+    if (!identical(_interstitialAd, ad) || _isShowing) return;
+    _dropCached();
+    if (isAppInForeground) load();
+  }
+
+  /// Runs the load-success path with [ad], bypassing the SDK.
+  @visibleForTesting
+  void debugOnLoaded(InterstitialAd ad) => _onLoaded(ad);
 
   void _handleError(AdErrorType errorType, {String? errorMessage}) {
     final decision = _governor.onFailure(errorType, message: errorMessage);
@@ -207,6 +234,8 @@ class ApslAdmobInterstitialAd extends ApslAdBase {
     ad.setImmersiveMode(_config.immersiveModeEnabled);
     ad.show();
 
+    _expiryTimer?.cancel();
+    _expiryTimer = null;
     _interstitialAd = null;
     _loadedAt = null;
   }
