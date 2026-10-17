@@ -165,6 +165,14 @@ class ApslGamBannerAd extends ApslAdBase {
               ad.dispose();
               return;
             }
+            if (_isAdLoaded && identical(ad, _bannerAd)) {
+              // Refresh miss: the creative on screen stays; the SDK retries.
+              debugPrint(
+                '[ApslAds] GAM banner refresh failed, keeping current ad: '
+                '${error.message}',
+              );
+              return;
+            }
             _handleLoadFailure(
               mapLoadAdError(error),
               errorMessage:
