@@ -36,6 +36,9 @@ class ApslBannerAd extends StatefulWidget {
   /// Optional onAdShowed callback
   final ApslAdCallback? onAdShowed;
 
+  /// Optional onAdLoaded callback, fired for this instance's ad only.
+  final ApslAdCallback? onAdLoaded;
+
   /// Creates a new [ApslBannerAd] widget
   const ApslBannerAd({
     this.adNetwork = AdNetwork.admob,
@@ -43,6 +46,7 @@ class ApslBannerAd extends StatefulWidget {
     this.config,
     this.onAdFailedToLoad,
     this.onAdShowed,
+    this.onAdLoaded,
     super.key,
   });
 
@@ -81,9 +85,9 @@ class _ApslBannerAdState extends State<ApslBannerAd> {
 
   /// Initializes the banner ad with the current configuration.
   ///
-  /// User callbacks (`widget.onAdFailedToLoad` / `widget.onAdShowed`) are
-  /// attached inside [ApslAds.createBanner] via the multicast listener API,
-  /// so we only register our internal "ready to setState" hook here.
+  /// `widget.onAdFailedToLoad` / `widget.onAdShowed` are attached inside
+  /// [ApslAds.createBanner]; `widget.onAdLoaded` and the internal
+  /// "ready to setState" hook are registered here.
   void _initBanner() {
     _bannerAd?.dispose();
     _bannerAd = ApslAds.instance.createBanner(
@@ -95,6 +99,8 @@ class _ApslBannerAdState extends State<ApslBannerAd> {
     );
 
     _bannerAd?.addOnAdLoaded(_onBannerAdReady);
+    final onAdLoaded = widget.onAdLoaded;
+    if (onAdLoaded != null) _bannerAd?.addOnAdLoaded(onAdLoaded);
     _bannerAd?.addOnBannerAdReadyForSetState(_onBannerAdReady);
 
     _bannerAd?.load();
